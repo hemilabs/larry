@@ -8,6 +8,7 @@ require (
 	github.com/juju/loggo v1.0.0
 	github.com/nutsdb/nutsdb v1.0.5-0.20250903151218-b455523071f3
 	github.com/syndtr/goleveldb v1.0.0
+	go.etcd.io/bbolt v1.4.3
 	go.mills.io/bitcask/v2 v2.1.3
 )
 
