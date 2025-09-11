@@ -8,6 +8,7 @@ require (
 	github.com/juju/loggo v1.0.0
 	github.com/nutsdb/nutsdb v1.0.5-0.20250903151218-b455523071f3
 	github.com/syndtr/goleveldb v1.0.0
+	github.com/tidwall/buntdb v1.3.2
 	go.etcd.io/bbolt v1.4.3
 	go.mills.io/bitcask/v2 v2.1.3
 )
@@ -51,6 +52,12 @@ require (
 	github.com/rogpeppe/go-internal v1.13.1 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/tidwall/btree v1.7.0 // indirect
+	github.com/tidwall/gjson v1.14.3 // indirect
+	github.com/tidwall/grect v0.1.4 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/pretty v1.2.0 // indirect
+	github.com/tidwall/rtred v0.1.2 // indirect
+	github.com/tidwall/tinyqueue v0.1.1 // indirect
 	github.com/xujiajun/utils v0.0.0-20220904132955-5f7c5b914235 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.37.0 // indirect
