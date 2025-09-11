@@ -305,7 +305,7 @@ func (tx *mongoTX) Del(pctx context.Context, table string, key []byte) error {
 
 func (tx *mongoTX) Has(pctx context.Context, table string, key []byte) (bool, error) {
 	if _, ok := tx.db.tables[table]; !ok {
-		return false, ErrTableNotFound
+		return false, larry.ErrTableNotFound
 	}
 	sctx, cancel := context.WithCancel(pctx)
 	defer cancel()
@@ -328,7 +328,7 @@ func (tx *mongoTX) Has(pctx context.Context, table string, key []byte) (bool, er
 
 func (tx *mongoTX) Get(pctx context.Context, table string, key []byte) ([]byte, error) {
 	if _, ok := tx.db.tables[table]; !ok {
-		return nil, ErrTableNotFound
+		return nil, larry.ErrTableNotFound
 	}
 	sctx, cancel := context.WithCancel(pctx)
 	defer cancel()
@@ -344,7 +344,7 @@ func (tx *mongoTX) Get(pctx context.Context, table string, key []byte) ([]byte, 
 
 func (tx *mongoTX) Put(pctx context.Context, table string, key []byte, value []byte) error {
 	if _, ok := tx.db.tables[table]; !ok {
-		return ErrTableNotFound
+		return larry.ErrTableNotFound
 	}
 	sctx, cancel := context.WithCancel(pctx)
 	defer cancel()
@@ -372,7 +372,7 @@ func (tx *mongoTX) Rollback(ctx context.Context) error {
 	return nil
 }
 
-func (tx *mongoTX) Write(pctx context.Context, b Batch) error {
+func (tx *mongoTX) Write(pctx context.Context, b larry.Batch) error {
 	sctx, cancel := context.WithCancel(pctx)
 	defer cancel()
 
@@ -549,7 +549,7 @@ type mongoBatch struct {
 
 func (nb *mongoBatch) Del(ctx context.Context, table string, key []byte) {
 	if _, ok := nb.db.tables[table]; !ok {
-		log.Errorf("%s: %v", table, ErrTableNotFound)
+		log.Errorf("%s: %v", table, larry.ErrTableNotFound)
 		return
 	}
 	m := mongo.NewClientDeleteOneModel().SetFilter(bson.D{{Key: "key", Value: key}})
@@ -563,7 +563,7 @@ func (nb *mongoBatch) Del(ctx context.Context, table string, key []byte) {
 
 func (nb *mongoBatch) Put(ctx context.Context, table string, key, value []byte) {
 	if _, ok := nb.db.tables[table]; !ok {
-		log.Errorf("%s: %v", table, ErrTableNotFound)
+		log.Errorf("%s: %v", table, larry.ErrTableNotFound)
 		return
 	}
 	m := mongo.NewClientUpdateOneModel().SetFilter(bson.D{{Key: "key", Value: key}}).SetUpsert(true).
