@@ -36,11 +36,6 @@ var (
 	_ larry.Transaction = (*levelTX)(nil)
 )
 
-type LevelConfig struct {
-	Home   string
-	Tables []string
-}
-
 func xerr(err error) error {
 	switch {
 	case errors.Is(err, leveldb.ErrClosed):
@@ -49,6 +44,11 @@ func xerr(err error) error {
 		err = larry.ErrKeyNotFound
 	}
 	return err
+}
+
+type LevelConfig struct {
+	Home   string
+	Tables []string
 }
 
 func DefaultLevelConfig(home string, tables []string) *LevelConfig {
