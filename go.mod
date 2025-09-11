@@ -5,7 +5,9 @@ go 1.25.1
 require (
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/dgraph-io/badger/v4 v4.8.0
+	github.com/dustin/go-humanize v1.0.1
 	github.com/juju/loggo v1.0.0
+	github.com/kelindar/binary v1.0.19
 	github.com/nutsdb/nutsdb v1.0.5-0.20250903151218-b455523071f3
 	github.com/syndtr/goleveldb v1.0.0
 	github.com/tidwall/buntdb v1.3.2
@@ -28,7 +30,6 @@ require (
 	github.com/cockroachdb/redact v1.1.5 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06 // indirect
 	github.com/dgraph-io/ristretto/v2 v2.2.0 // indirect
-	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/edsrzf/mmap-go v1.2.0 // indirect
 	github.com/getsentry/sentry-go v0.27.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect

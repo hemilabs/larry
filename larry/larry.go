@@ -8,7 +8,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/juju/loggo"
 )
+
+const logLevel = "INFO"
+
+var log = loggo.GetLogger("larry")
+
+func init() {
+	if err := loggo.ConfigureLoggers(logLevel); err != nil {
+		panic(err)
+	}
+}
 
 var (
 	ErrDBClosed       = errors.New("database is closed")
