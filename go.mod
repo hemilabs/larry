@@ -7,6 +7,7 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 	github.com/dgraph-io/badger/v4 v4.8.0
 	github.com/dustin/go-humanize v1.0.1
+	github.com/guycipher/btree v1.3.2
 	github.com/juju/loggo v1.0.0
 	github.com/kelindar/binary v1.0.19
 	github.com/nutsdb/nutsdb v1.0.5-0.20250903151218-b455523071f3
@@ -41,6 +42,7 @@ require (
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/flatbuffers v25.2.10+incompatible // indirect
 	github.com/hashicorp/go-immutable-radix/v2 v2.0.0 // indirect
+	github.com/hashicorp/go-msgpack v0.5.5 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
