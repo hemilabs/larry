@@ -10,12 +10,14 @@ require (
 	github.com/guycipher/btree v1.3.2
 	github.com/juju/loggo v1.0.0
 	github.com/kelindar/binary v1.0.19
+	github.com/klauspost/compress v1.18.0
 	github.com/nutsdb/nutsdb v1.0.5-0.20250903151218-b455523071f3
 	github.com/syndtr/goleveldb v1.0.0
 	github.com/tidwall/buntdb v1.3.2
 	go.etcd.io/bbolt v1.4.3
 	go.mills.io/bitcask/v2 v2.1.3
 	go.mongodb.org/mongo-driver/v2 v2.3.0
+	golang.org/x/sync v0.15.0
 )
 
 require (
@@ -44,7 +46,6 @@ require (
 	github.com/hashicorp/go-immutable-radix/v2 v2.0.0 // indirect
 	github.com/hashicorp/go-msgpack v0.5.5 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/mattetti/filebuffer v1.0.1 // indirect
@@ -75,7 +76,6 @@ require (
 	golang.org/x/crypto v0.39.0 // indirect
 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
 	golang.org/x/net v0.41.0 // indirect
-	golang.org/x/sync v0.15.0 // indirect
 	golang.org/x/sys v0.34.0 // indirect
 	golang.org/x/text v0.26.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
