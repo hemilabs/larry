@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1274,17 +1275,122 @@ func TestLarry(t *testing.T) {
 	}
 }
 
-func BenchmarkLarryPut(b *testing.B) {
+func BenchmarkLarryBatch(b *testing.B) {
 	testTable := getDBs()
 	ctx, cancel := context.WithCancel(b.Context())
 	defer cancel()
-	for _, tti := range testTable {
+	for _, tti := range testTable[:len(testTable)-2] {
+		for _, insertCount := range []int{1, 10, 100, 1000, 10000} {
+			benchName := fmt.Sprintf("%v/%v", tti.name, insertCount)
+			b.Run(benchName, func(b *testing.B) {
+				home := b.TempDir()
+
+				tables := []string{"t"}
+
+				db := tti.dbFunc(home, tables)
+				err := db.Open(ctx)
+				if err != nil {
+					b.Fatal(err)
+				}
+				defer func() {
+					err := db.Close(ctx)
+					if err != nil {
+						b.Fatal(err)
+					}
+				}()
+
+				keyList := make([][]byte, 0, insertCount)
+				for i := range insertCount {
+					var key [4]byte
+					binary.BigEndian.PutUint32(key[:], uint32(i))
+					keyList = append(keyList, key[:])
+				}
+
+				wb, err := db.NewBatch(ctx)
+				if err != nil {
+					b.Fatal(err)
+				}
+				for _, k := range keyList {
+					wb.Put(ctx, "t", k, nil)
+				}
+
+				for b.Loop() {
+					db.Update(ctx, func(ctx context.Context, tx larry.Transaction) error {
+						return tx.Write(ctx, wb)
+					})
+				}
+			})
+		}
+	}
+}
+
+func BenchmarkLarryIter(b *testing.B) {
+	testTable := getDBs()
+	ctx, cancel := context.WithCancel(b.Context())
+	defer cancel()
+	for _, tti := range testTable[:len(testTable)-2] {
+		insertCount := 10
+		benchName := fmt.Sprintf("%v/%d-iterations", tti.name, insertCount)
+		b.Run(benchName, func(b *testing.B) {
+			home := b.TempDir()
+
+			table := "t"
+			tables := []string{table}
+
+			db := tti.dbFunc(home, tables)
+			err := db.Open(ctx)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer func() {
+				err := db.Close(ctx)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}()
+
+			errc := db.Update(ctx, func(ctx context.Context, tx larry.Transaction) error {
+				for i := range insertCount {
+					var key [4]byte
+					binary.BigEndian.PutUint32(key[:], uint32(i))
+					if err := tx.Put(ctx, table, key[:], key[:]); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+			if errc != nil {
+				b.Fatal(errc)
+			}
+
+			it, err := db.NewIterator(ctx, table)
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			for b.Loop() {
+				it.First(ctx)
+				for it.Next(ctx) {
+				}
+			}
+
+			it.Close(ctx)
+		})
+
+	}
+}
+
+func BenchmarkLarryGet(b *testing.B) {
+	testTable := getDBs()
+	ctx, cancel := context.WithCancel(b.Context())
+	defer cancel()
+	for _, tti := range testTable[:len(testTable)-2] {
 		for _, insertCount := range []int{1, 10, 100, 1000, 10000, 100000} {
 			benchName := fmt.Sprintf("%v/%v", tti.name, insertCount)
 			b.Run(benchName, func(b *testing.B) {
 				home := b.TempDir()
 
-				table := "table0"
+				table := "t"
 				tables := []string{table}
 
 				db := tti.dbFunc(home, tables)
@@ -1299,18 +1405,25 @@ func BenchmarkLarryPut(b *testing.B) {
 					}
 				}()
 
-				bt, err := db.NewBatch(ctx)
-				if err != nil {
-					b.Fatal(err)
-				}
-				for i := range insertCount {
-					bt.Put(ctx, table, []byte{uint8(i)}, []byte{uint8(i)})
+				errc := db.Update(ctx, func(ctx context.Context, tx larry.Transaction) error {
+					for i := range insertCount {
+						var key [4]byte
+						binary.BigEndian.PutUint32(key[:], uint32(i))
+						if err := tx.Put(ctx, table, key[:], key[:]); err != nil {
+							return err
+						}
+					}
+					return nil
+				})
+				if errc != nil {
+					b.Fatal(errc)
 				}
 
 				for b.Loop() {
-					err = db.Update(ctx, func(ctx context.Context, tx larry.Transaction) error {
-						return tx.Write(ctx, bt)
-					})
+					var key [4]byte
+					r := rand.Uint32N(uint32(insertCount))
+					binary.BigEndian.PutUint32(key[:], r)
+					_, err := db.Get(ctx, table, key[:])
 					if err != nil {
 						b.Fatal(err)
 					}
