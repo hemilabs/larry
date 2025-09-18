@@ -2,7 +2,7 @@
 // Use of this source code is governed by the MIT License,
 // which can be found in the LICENSE file.
 
-package aggregator
+package multi
 
 import (
 	"context"
@@ -14,14 +14,17 @@ import (
 
 	"github.com/hemilabs/larry/larry"
 	"github.com/hemilabs/larry/larry/level"
-	"github.com/hemilabs/larry/larry/rawdb"
+	"github.com/hemilabs/larry/larry/pebble"
 	"github.com/juju/loggo"
 	"github.com/mitchellh/go-homedir"
 )
 
-const logLevel = "INFO"
+const (
+	logLevel = "INFO"
+	dbname   = ""
+)
 
-var log = loggo.GetLogger("aggregator")
+var log = loggo.GetLogger("multi")
 
 func init() {
 	if err := loggo.ConfigureLoggers(logLevel); err != nil {
@@ -31,51 +34,49 @@ func init() {
 
 // Assert required interfaces
 var (
-	_ larry.Batch       = (*aggregatorBatch)(nil)
-	_ larry.Database    = (*aggregatorDB)(nil)
-	_ larry.Transaction = (*aggregatorTX)(nil)
+	_ larry.Batch       = (*multiBatch)(nil)
+	_ larry.Database    = (*multiDB)(nil)
+	_ larry.Transaction = (*multiTX)(nil)
 )
 
-type AggregatorConfig struct {
+type MultiConfig struct {
 	Home   string
-	DB     string
-	Tables []string // name / db type
+	Tables map[string]string // key: name, value: db type
 }
 
-func DefaultAggregatorConfig(home string, db string, tables []string) *AggregatorConfig {
-	return &AggregatorConfig{
+func DefaultMultiConfig(home string, tables map[string]string) *MultiConfig {
+	return &MultiConfig{
 		Home:   home,
 		Tables: tables,
-		DB:     db,
 	}
 }
 
 type pool map[string]larry.Database
 
-type rawPool map[string]*rawdb.RawDB
-
-type aggregatorDB struct {
+type multiDB struct {
 	mtx sync.RWMutex
 
 	pool pool // database pool
 
-	cfg *AggregatorConfig
+	cfg *MultiConfig
 
 	open bool
 }
 
-func (l *aggregatorDB) openDB(ctx context.Context, db, name string) error {
-	bhs := filepath.Join(l.cfg.Home, name)
-
+func (l *multiDB) openDB(ctx context.Context, db, name string) error {
 	var (
 		bhsDB larry.Database
 		err   error
 	)
 
+	bhs := filepath.Join(l.cfg.Home, name)
 	switch db {
 	case "level":
-		cfg := level.DefaultLevelConfig(bhs, []string{""})
+		cfg := level.DefaultLevelConfig(bhs, []string{dbname})
 		bhsDB, err = level.NewLevelDB(cfg)
+	case "pebble":
+		cfg := pebble.DefaultPebbleConfig(bhs, []string{dbname})
+		bhsDB, err = pebble.NewPebbleDB(cfg)
 	default:
 		err = fmt.Errorf("unsupported db type: %v", db)
 	}
@@ -91,7 +92,7 @@ func (l *aggregatorDB) openDB(ctx context.Context, db, name string) error {
 	return nil
 }
 
-func NewAggregatorDB(cfg *AggregatorConfig) (larry.Database, error) {
+func NewMultiDB(cfg *MultiConfig) (larry.Database, error) {
 	if cfg == nil {
 		return nil, larry.ErrInvalidConfig
 	}
@@ -105,28 +106,28 @@ func NewAggregatorDB(cfg *AggregatorConfig) (larry.Database, error) {
 		return nil, fmt.Errorf("mkdir: %w", err)
 	}
 
-	l := &aggregatorDB{
+	l := &multiDB{
 		cfg:  cfg,
-		pool: make(pool),
+		pool: make(pool, len(cfg.Tables)),
 	}
 
 	return l, nil
 }
 
-func (b *aggregatorDB) Open(ctx context.Context) error {
+func (b *multiDB) Open(ctx context.Context) error {
 	log.Tracef("Open")
 	defer log.Tracef("Open exit")
 
 	b.mtx.Lock()
-	defer b.mtx.Unlock()
-
 	if b.open {
+		b.mtx.Unlock()
 		return larry.ErrDBOpen
 	}
 
 	var err error
 	unwind := true
 	defer func() {
+		b.mtx.Unlock()
 		if unwind {
 			cerr := b.Close(ctx)
 			if cerr != nil {
@@ -137,8 +138,8 @@ func (b *aggregatorDB) Open(ctx context.Context) error {
 		}
 	}()
 
-	for _, name := range b.cfg.Tables {
-		err = b.openDB(ctx, b.cfg.DB, name)
+	for name, db := range b.cfg.Tables {
+		err = b.openDB(ctx, db, name)
 		if err != nil {
 			return fmt.Errorf("db pool %v: %w", name, err)
 		}
@@ -150,7 +151,7 @@ func (b *aggregatorDB) Open(ctx context.Context) error {
 	return err
 }
 
-func (l *aggregatorDB) Close(ctx context.Context) error {
+func (l *multiDB) Close(ctx context.Context) error {
 	log.Tracef("Close")
 	defer log.Tracef("Close exit")
 
@@ -176,47 +177,47 @@ func (l *aggregatorDB) Close(ctx context.Context) error {
 	return errSeen
 }
 
-func (b *aggregatorDB) Del(ctx context.Context, table string, key []byte) error {
+func (b *multiDB) Del(ctx context.Context, table string, key []byte) error {
 	db, ok := b.pool[table]
 	if !ok {
 		return larry.ErrTableNotFound
 	}
-	return db.Del(ctx, "", key)
+	return db.Del(ctx, dbname, key)
 }
 
-func (b *aggregatorDB) Has(ctx context.Context, table string, key []byte) (bool, error) {
+func (b *multiDB) Has(ctx context.Context, table string, key []byte) (bool, error) {
 	db, ok := b.pool[table]
 	if !ok {
 		return false, larry.ErrTableNotFound
 	}
-	return db.Has(ctx, "", key)
+	return db.Has(ctx, dbname, key)
 }
 
-func (b *aggregatorDB) Get(ctx context.Context, table string, key []byte) ([]byte, error) {
+func (b *multiDB) Get(ctx context.Context, table string, key []byte) ([]byte, error) {
 	db, ok := b.pool[table]
 	if !ok {
 		return nil, larry.ErrTableNotFound
 	}
-	return db.Get(ctx, "", key)
+	return db.Get(ctx, dbname, key)
 }
 
-func (b *aggregatorDB) Put(ctx context.Context, table string, key, value []byte) error {
+func (b *multiDB) Put(ctx context.Context, table string, key, value []byte) error {
 	db, ok := b.pool[table]
 	if !ok {
 		return larry.ErrTableNotFound
 	}
-	return db.Put(ctx, "", key, value)
+	return db.Put(ctx, dbname, key, value)
 }
 
-func (b *aggregatorDB) Begin(_ context.Context, write bool) (larry.Transaction, error) {
-	return &aggregatorTX{
+func (b *multiDB) Begin(_ context.Context, write bool) (larry.Transaction, error) {
+	return &multiTX{
 		db:    b,
 		txs:   make(map[string]larry.Transaction, len(b.pool)),
 		write: write,
 	}, nil
 }
 
-func (b *aggregatorDB) execute(ctx context.Context, write bool, callback func(ctx context.Context, tx larry.Transaction) error) error {
+func (b *multiDB) execute(ctx context.Context, write bool, callback func(ctx context.Context, tx larry.Transaction) error) error {
 	tx, err := b.Begin(ctx, write)
 	if err != nil {
 		return err
@@ -235,32 +236,32 @@ func (b *aggregatorDB) execute(ctx context.Context, write bool, callback func(ct
 	return tx.Commit(ctx)
 }
 
-func (b *aggregatorDB) View(ctx context.Context, callback func(ctx context.Context, tx larry.Transaction) error) error {
+func (b *multiDB) View(ctx context.Context, callback func(ctx context.Context, tx larry.Transaction) error) error {
 	return b.execute(ctx, false, callback)
 }
 
-func (b *aggregatorDB) Update(ctx context.Context, callback func(ctx context.Context, tx larry.Transaction) error) error {
+func (b *multiDB) Update(ctx context.Context, callback func(ctx context.Context, tx larry.Transaction) error) error {
 	return b.execute(ctx, true, callback)
 }
 
-func (b *aggregatorDB) NewIterator(ctx context.Context, table string) (larry.Iterator, error) {
+func (b *multiDB) NewIterator(ctx context.Context, table string) (larry.Iterator, error) {
 	idb, ok := b.pool[table]
 	if !ok {
 		return nil, larry.ErrTableNotFound
 	}
-	return idb.NewIterator(ctx, "")
+	return idb.NewIterator(ctx, dbname)
 }
 
-func (b *aggregatorDB) NewRange(ctx context.Context, table string, start, end []byte) (larry.Range, error) {
+func (b *multiDB) NewRange(ctx context.Context, table string, start, end []byte) (larry.Range, error) {
 	idb, ok := b.pool[table]
 	if !ok {
 		return nil, larry.ErrTableNotFound
 	}
-	return idb.NewRange(ctx, "", start, end)
+	return idb.NewRange(ctx, dbname, start, end)
 }
 
-func (b *aggregatorDB) NewBatch(ctx context.Context) (larry.Batch, error) {
-	return &aggregatorBatch{
+func (b *multiDB) NewBatch(ctx context.Context) (larry.Batch, error) {
+	return &multiBatch{
 		db:  b,
 		bts: make(map[string]larry.Batch, len(b.pool)),
 	}, nil
@@ -268,13 +269,13 @@ func (b *aggregatorDB) NewBatch(ctx context.Context) (larry.Batch, error) {
 
 // Transactions
 
-type aggregatorTX struct {
-	db    *aggregatorDB
+type multiTX struct {
+	db    *multiDB
 	txs   map[string]larry.Transaction
 	write bool
 }
 
-func (tx *aggregatorTX) addInternalTx(ctx context.Context, table string) error {
+func (tx *multiTX) addInternalTx(ctx context.Context, table string) error {
 	idb, ok := tx.db.pool[table]
 	if !ok {
 		return larry.ErrTableNotFound
@@ -291,35 +292,35 @@ func (tx *aggregatorTX) addInternalTx(ctx context.Context, table string) error {
 	return nil
 }
 
-func (tx *aggregatorTX) Del(ctx context.Context, table string, key []byte) error {
+func (tx *multiTX) Del(ctx context.Context, table string, key []byte) error {
 	if err := tx.addInternalTx(ctx, table); err != nil {
 		return err
 	}
-	return tx.txs[table].Del(ctx, "", key)
+	return tx.txs[table].Del(ctx, dbname, key)
 }
 
-func (tx *aggregatorTX) Has(ctx context.Context, table string, key []byte) (bool, error) {
+func (tx *multiTX) Has(ctx context.Context, table string, key []byte) (bool, error) {
 	if err := tx.addInternalTx(ctx, table); err != nil {
 		return false, err
 	}
-	return tx.txs[table].Has(ctx, "", key)
+	return tx.txs[table].Has(ctx, dbname, key)
 }
 
-func (tx *aggregatorTX) Get(ctx context.Context, table string, key []byte) ([]byte, error) {
+func (tx *multiTX) Get(ctx context.Context, table string, key []byte) ([]byte, error) {
 	if err := tx.addInternalTx(ctx, table); err != nil {
 		return nil, err
 	}
-	return tx.txs[table].Get(ctx, "", key)
+	return tx.txs[table].Get(ctx, dbname, key)
 }
 
-func (tx *aggregatorTX) Put(ctx context.Context, table string, key []byte, value []byte) error {
+func (tx *multiTX) Put(ctx context.Context, table string, key []byte, value []byte) error {
 	if err := tx.addInternalTx(ctx, table); err != nil {
 		return err
 	}
-	return tx.txs[table].Put(ctx, "", key, value)
+	return tx.txs[table].Put(ctx, dbname, key, value)
 }
 
-func (tx *aggregatorTX) Commit(ctx context.Context) error {
+func (tx *multiTX) Commit(ctx context.Context) error {
 	var errSeen error
 	for table, itx := range tx.txs {
 		if err := itx.Commit(ctx); err != nil {
@@ -329,7 +330,7 @@ func (tx *aggregatorTX) Commit(ctx context.Context) error {
 	return errSeen
 }
 
-func (tx *aggregatorTX) Rollback(ctx context.Context) error {
+func (tx *multiTX) Rollback(ctx context.Context) error {
 	var errSeen error
 	for table, itx := range tx.txs {
 		if err := itx.Rollback(ctx); err != nil {
@@ -341,9 +342,9 @@ func (tx *aggregatorTX) Rollback(ctx context.Context) error {
 
 // If writing batches to multiple internal dbs, we cannot ensure the
 // order between them, but this should not be a problem for the
-// use case of aggregator.
-func (tx *aggregatorTX) Write(ctx context.Context, b larry.Batch) error {
-	bb, ok := b.(*aggregatorBatch)
+// use case of multi.
+func (tx *multiTX) Write(ctx context.Context, b larry.Batch) error {
+	bb, ok := b.(*multiBatch)
 	if !ok {
 		return fmt.Errorf("unexpected batch type: %T", b)
 	}
@@ -358,12 +359,12 @@ func (tx *aggregatorTX) Write(ctx context.Context, b larry.Batch) error {
 
 // Batches
 
-type aggregatorBatch struct {
-	db  *aggregatorDB
+type multiBatch struct {
+	db  *multiDB
 	bts map[string]larry.Batch
 }
 
-func (ab *aggregatorBatch) addInternalBatch(ctx context.Context, table string) error {
+func (ab *multiBatch) addInternalBatch(ctx context.Context, table string) error {
 	idb, ok := ab.db.pool[table]
 	if !ok {
 		return larry.ErrTableNotFound
@@ -380,22 +381,22 @@ func (ab *aggregatorBatch) addInternalBatch(ctx context.Context, table string) e
 	return nil
 }
 
-func (ab *aggregatorBatch) Del(ctx context.Context, table string, key []byte) {
+func (ab *multiBatch) Del(ctx context.Context, table string, key []byte) {
 	if err := ab.addInternalBatch(ctx, table); err != nil {
 		log.Errorf("batch del %v: %w", table, err)
 		return
 	}
-	ab.bts[table].Del(ctx, "", key)
+	ab.bts[table].Del(ctx, dbname, key)
 }
 
-func (ab *aggregatorBatch) Put(ctx context.Context, table string, key, value []byte) {
+func (ab *multiBatch) Put(ctx context.Context, table string, key, value []byte) {
 	if err := ab.addInternalBatch(ctx, table); err != nil {
 		log.Errorf("batch put %v: %w", table, err)
 		return
 	}
-	ab.bts[table].Put(ctx, "", key, value)
+	ab.bts[table].Put(ctx, dbname, key, value)
 }
 
-func (ab *aggregatorBatch) Reset(ctx context.Context) {
+func (ab *multiBatch) Reset(ctx context.Context) {
 	ab.bts = make(map[string]larry.Batch, len(ab.db.pool))
 }

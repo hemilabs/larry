@@ -18,13 +18,13 @@ import (
 	"testing"
 
 	"github.com/hemilabs/larry/larry"
-	"github.com/hemilabs/larry/larry/aggregator"
 	"github.com/hemilabs/larry/larry/badger"
 	"github.com/hemilabs/larry/larry/bbolt"
 	"github.com/hemilabs/larry/larry/bitcask"
 	"github.com/hemilabs/larry/larry/bunt"
 	"github.com/hemilabs/larry/larry/level"
 	"github.com/hemilabs/larry/larry/mongo"
+	"github.com/hemilabs/larry/larry/multi"
 	"github.com/hemilabs/larry/larry/nuts"
 	"github.com/hemilabs/larry/larry/pebble"
 	"github.com/hemilabs/larry/larry/replicator"
@@ -939,10 +939,18 @@ type TestTableItem struct {
 func getDBs() []TestTableItem {
 	dbs := []TestTableItem{
 		{
-			name: "aggregator",
+			name: "multidb",
 			dbFunc: func(home string, tables []string) larry.Database {
-				cfg := aggregator.DefaultAggregatorConfig(home, "level", tables)
-				db, err := aggregator.NewAggregatorDB(cfg)
+				tm := make(map[string]string, len(tables))
+				for i, t := range tables {
+					if i%2 == 0 {
+						tm[t] = "level"
+						continue
+					}
+					tm[t] = "pebble"
+				}
+				cfg := multi.DefaultMultiConfig(home, tm)
+				db, err := multi.NewMultiDB(cfg)
 				if err != nil {
 					panic(err)
 				}
