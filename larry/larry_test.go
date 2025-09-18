@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/hemilabs/larry/larry"
+	"github.com/hemilabs/larry/larry/aggregator"
 	"github.com/hemilabs/larry/larry/badger"
 	"github.com/hemilabs/larry/larry/bbolt"
 	"github.com/hemilabs/larry/larry/bitcask"
@@ -504,12 +505,13 @@ func dbTransactionsMultipleWrite(ctx context.Context, db larry.Database, table s
 					}
 				}
 			}()
-			// see if value set by last tx matches "last"
-			ve := newVal(last)
+
 			rv, err := tx.Get(ctx, table, key)
 			if err != nil {
 				return fmt.Errorf("tx%d - get: %w", i, err)
 			}
+			// see if value set by last tx matches "last"
+			ve := newVal(last)
 			if !bytes.Equal(rv, ve) {
 				return fmt.Errorf("tx%d - expected %v, got %v", i, ve, rv)
 			}
@@ -936,6 +938,17 @@ type TestTableItem struct {
 
 func getDBs() []TestTableItem {
 	dbs := []TestTableItem{
+		{
+			name: "aggregator",
+			dbFunc: func(home string, tables []string) larry.Database {
+				cfg := aggregator.DefaultAggregatorConfig(home, "level", tables)
+				db, err := aggregator.NewAggregatorDB(cfg)
+				if err != nil {
+					panic(err)
+				}
+				return db
+			},
+		},
 		{
 			name: "badgerDB",
 			dbFunc: func(home string, tables []string) larry.Database {

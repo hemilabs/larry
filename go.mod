@@ -11,6 +11,7 @@ require (
 	github.com/juju/loggo v1.0.0
 	github.com/kelindar/binary v1.0.19
 	github.com/klauspost/compress v1.18.0
+	github.com/mitchellh/go-homedir v1.1.0
 	github.com/nutsdb/nutsdb v1.0.5-0.20250903151218-b455523071f3
 	github.com/syndtr/goleveldb v1.0.0
 	github.com/tidwall/buntdb v1.3.2
