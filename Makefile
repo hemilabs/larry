@@ -2,9 +2,9 @@
 # Use of this source code is governed by the MIT License,
 # which can be found in the LICENSE file.
 
-.PHONY: all clean deps tidy build lint lint-deps test
+.PHONY: all clean deps tidy lint lint-deps test
 
-all: tidy build lint test
+all: tidy lint test
 
 clean:
 	rm -rf ./bin/
@@ -15,9 +15,6 @@ deps: tidy
 
 tidy:
 	go mod tidy
-
-build:
-	go build -trimpath -ldflags "-s -w $(GO_LDFLAGS)" -o ./bin/larry ./larry
 
 define LICENSE_HEADER
 Copyright (c) 2025 Hemi Labs, Inc.
