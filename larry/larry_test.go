@@ -1664,6 +1664,63 @@ func TestCopy(t *testing.T) {
 	}
 }
 
+func TestCompositeKey(t *testing.T) {
+	type testTableItem struct {
+		name       string
+		key, table string
+		expected   string
+	}
+	testTable := []testTableItem{
+		{
+			name:     "default",
+			key:      "key",
+			table:    "table",
+			expected: "table:key",
+		},
+		{
+			name:     "empty table",
+			key:      "key",
+			table:    "",
+			expected: "key",
+		},
+		{
+			name:     "empty key",
+			key:      "",
+			table:    "table",
+			expected: "table:",
+		},
+		{
+			name:     "all empty",
+			key:      "",
+			table:    "",
+			expected: "",
+		},
+	}
+	for _, tti := range testTable {
+		t.Run(tti.name, func(t *testing.T) {
+			ck := larry.NewCompositeKey(tti.table, []byte(tti.key))
+			if !bytes.Equal(ck, []byte(tti.expected)) {
+				t.Errorf("NewCompositeKey: got %s, expected %v", string(ck), tti.expected)
+				t.Fail()
+			}
+			k := larry.KeyFromComposite(tti.table, ck)
+			if !bytes.Equal(k, []byte(tti.key)) {
+				t.Errorf("KeyFromComposite: got %s, expected %v", string(k), tti.key)
+				t.Fail()
+			}
+		})
+	}
+}
+
+func TestInvalidComposite(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("expected panic")
+		}
+	}()
+	_ = larry.KeyFromComposite("table", []byte(""))
+}
+
 // TODO tests
 // iterator / range concurrent put / del (for reverse reliant iters)
 // iterator / range no keys
