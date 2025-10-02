@@ -182,7 +182,11 @@ func (b *bitcaskDB) NewIterator(ctx context.Context, table string) (larry.Iterat
 	// Since iterators use a snapshot from their creation,
 	// the value should always remain the same.
 	revIt := b.db.Iterator(bitcask.Reverse())
-	defer revIt.Close()
+	defer func() {
+		if err := revIt.Close(); err != nil {
+			log.Errorf("close reverse iterator: %v", err)
+		}
+	}()
 
 	item, err := revIt.SeekPrefix(b.k2b(table, nil))
 	if err != nil || !bytes.HasPrefix(item.Key(), larry.NewCompositeKey(table, nil)) {
@@ -209,7 +213,11 @@ func (b *bitcaskDB) NewRange(ctx context.Context, table string, start, end []byt
 	// Since iterators use a snapshot from their creation,
 	// the value should always remain the same.
 	revIt := b.db.Iterator(bitcask.Reverse())
-	defer revIt.Close()
+	defer func() {
+		if err := revIt.Close(); err != nil {
+			log.Errorf("close reverse iterator: %v", err)
+		}
+	}()
 
 	endKey := larry.NewCompositeKey(table, end)
 	startKey := larry.NewCompositeKey(table, start)
@@ -328,7 +336,9 @@ type bitcaskIterator struct {
 }
 
 func (bi *bitcaskIterator) resetIterator(prefix bitcask.Key) (*bitcask.Item, error) {
-	bi.it.Close()
+	if err := bi.it.Close(); err != nil {
+		return nil, fmt.Errorf("close iterator: %w", err)
+	}
 	it := bi.db.db.Iterator()
 	item, err := it.SeekPrefix(prefix)
 	if err != nil {
@@ -393,7 +403,9 @@ func (bi *bitcaskIterator) Value(_ context.Context) []byte {
 }
 
 func (bi *bitcaskIterator) Close(ctx context.Context) {
-	bi.it.Close() // ignore error, it's a noop
+	if err := bi.it.Close(); err != nil {
+		log.Errorf("close iterator: %w", err)
+	}
 }
 
 // Range
@@ -411,7 +423,9 @@ type bitcaskRange struct {
 }
 
 func (br *bitcaskRange) resetIterator(prefix bitcask.Key) (*bitcask.Item, error) {
-	br.it.Close()
+	if err := br.it.Close(); err != nil {
+		return nil, fmt.Errorf("close iterator: %w", err)
+	}
 	it := br.db.db.Iterator()
 	item, err := it.SeekPrefix(prefix)
 	if err != nil {
@@ -470,7 +484,9 @@ func (br *bitcaskRange) Value(_ context.Context) []byte {
 }
 
 func (br *bitcaskRange) Close(ctx context.Context) {
-	br.it.Close() // ignore error, it's a noop
+	if err := br.it.Close(); err != nil {
+		log.Errorf("close iterator: %w", err)
+	}
 }
 
 // Batches

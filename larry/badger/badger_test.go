@@ -1,3 +1,7 @@
+// Copyright (c) 2025 Hemi Labs, Inc.
+// Use of this source code is governed by the MIT License,
+// which can be found in the LICENSE file.
+
 package badger
 
 import (
@@ -40,9 +44,13 @@ func BenchmarkNativeBatch(b *testing.B) {
 	for b.Loop() {
 		wb := bdb.db.NewWriteBatch()
 		for _, k := range keyList {
-			wb.Set(k, nil)
+			if err := wb.Set(k, nil); err != nil {
+				b.Fatal(err)
+			}
 		}
-		wb.Flush()
+		if err := wb.Flush(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -81,8 +89,11 @@ func BenchmarkBatch(b *testing.B) {
 	}
 
 	for b.Loop() {
-		db.Update(ctx, func(ctx context.Context, tx larry.Transaction) error {
+		err := db.Update(ctx, func(ctx context.Context, tx larry.Transaction) error {
 			return tx.Write(ctx, wb)
 		})
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 }

@@ -51,8 +51,6 @@ type Database interface {
 	// Iterators, exist inside a Transaction
 	NewIterator(ctx context.Context, table string) (Iterator, error)
 	NewRange(ctx context.Context, table string, start, end []byte) (Range, error)
-	// XXX I am kind of the opinion that we need a prefix index as well;
-	// maybe that can be achieved with Iterator as well. Think about this.
 
 	// Batches
 	NewBatch(ctx context.Context) (Batch, error)

@@ -430,7 +430,7 @@ func dbTransactionsRollback(ctx context.Context, db larry.Database, tables []str
 	}
 	defer func() {
 		if err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx)
 		}
 	}()
 	err = txputs(ctx, tx, tables, insertCount)
@@ -457,7 +457,7 @@ func dbTransactionsCommit(ctx context.Context, db larry.Database, tables []strin
 	}
 	defer func() {
 		if err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx)
 		}
 	}()
 	err = txputs(ctx, tx, tables, insertCount)
@@ -494,7 +494,7 @@ func dbTransactionsMultipleWrite(ctx context.Context, db larry.Database, table s
 			}
 			defer func() {
 				if err != nil {
-					tx.Rollback(ctx)
+					_ = tx.Rollback(ctx)
 				}
 			}()
 
@@ -539,7 +539,7 @@ func dbTransactionsDelete(ctx context.Context, db larry.Database, tables []strin
 	}
 	defer func() {
 		if err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx)
 		}
 	}()
 	err = txdelsEven(ctx, tx, tables, insertCount)
@@ -566,7 +566,7 @@ func dbTransactionsErrors(ctx context.Context, db larry.Database, tables []strin
 	}
 	defer func() {
 		if err != nil {
-			tx.Rollback(ctx)
+			_ = tx.Rollback(ctx)
 		}
 	}()
 	err = txputEmpty(ctx, tx, tables)
@@ -1360,9 +1360,12 @@ func BenchmarkLarryBatch(b *testing.B) {
 				}
 
 				for b.Loop() {
-					db.Update(ctx, func(ctx context.Context, tx larry.Transaction) error {
+					err := db.Update(ctx, func(ctx context.Context, tx larry.Transaction) error {
 						return tx.Write(ctx, wb)
 					})
+					if err != nil {
+						b.Fatal(err)
+					}
 				}
 			})
 		}

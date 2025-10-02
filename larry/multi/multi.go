@@ -141,7 +141,8 @@ func (b *multiDB) Open(ctx context.Context) error {
 	for name, db := range b.cfg.Tables {
 		err = b.openDB(ctx, db, name)
 		if err != nil {
-			return fmt.Errorf("db pool %v: %w", name, err)
+			err = fmt.Errorf("db pool %v: %w", name, err)
+			return err
 		}
 	}
 
@@ -324,7 +325,7 @@ func (tx *multiTX) Commit(ctx context.Context) error {
 	var errSeen error
 	for table, itx := range tx.txs {
 		if err := itx.Commit(ctx); err != nil {
-			errors.Join(errSeen, fmt.Errorf("commit tx %v, %w", table, err))
+			errSeen = errors.Join(errSeen, fmt.Errorf("commit tx %v, %w", table, err))
 		}
 	}
 	return errSeen
@@ -334,7 +335,7 @@ func (tx *multiTX) Rollback(ctx context.Context) error {
 	var errSeen error
 	for table, itx := range tx.txs {
 		if err := itx.Rollback(ctx); err != nil {
-			errors.Join(errSeen, fmt.Errorf("rollback tx %v, %w", table, err))
+			errSeen = errors.Join(errSeen, fmt.Errorf("rollback tx %v, %w", table, err))
 		}
 	}
 	return errSeen
@@ -349,7 +350,9 @@ func (tx *multiTX) Write(ctx context.Context, b larry.Batch) error {
 		return fmt.Errorf("unexpected batch type: %T", b)
 	}
 	for table, ibt := range bb.bts {
-		tx.addInternalTx(ctx, table)
+		if err := tx.addInternalTx(ctx, table); err != nil {
+			return fmt.Errorf("add internal tx %v: %w", table, err)
+		}
 		if err := tx.txs[table].Write(ctx, ibt); err != nil {
 			return fmt.Errorf("write batch %v: %w", table, err)
 		}

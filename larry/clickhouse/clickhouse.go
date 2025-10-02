@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
 	click "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/proto"
 	"github.com/hemilabs/larry/larry"
@@ -267,7 +266,7 @@ func (b *clickDB) NewIterator(pctx context.Context, table string) (larry.Iterato
 	}
 
 	// XXX PNOOMA
-	ctx := clickhouse.Context(pctx, clickhouse.WithBlockBufferSize(10))
+	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
 
 	cmd := fmt.Sprintf("SELECT * FROM %s FINAL", table)
 	rows, err := b.db.QueryContext(ctx, cmd)
@@ -287,7 +286,7 @@ func (b *clickDB) NewRange(pctx context.Context, table string, start, end []byte
 	}
 
 	// XXX PNOOMA
-	ctx := clickhouse.Context(pctx, clickhouse.WithBlockBufferSize(10))
+	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
 
 	cmd := fmt.Sprintf("SELECT * FROM %s FINAL WHERE key >= $1 AND key < $2", table)
 	rows, err := b.db.QueryContext(ctx, cmd, string(start), string(end))
@@ -447,26 +446,30 @@ type clickIterator struct {
 
 func (ni *clickIterator) First(pctx context.Context) bool {
 	ni.key = ""
-	ctx := clickhouse.Context(pctx, clickhouse.WithBlockBufferSize(10))
+	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
 	cmd := fmt.Sprintf("SELECT * FROM %s FINAL", ni.table)
 	rows, err := ni.db.db.QueryContext(ctx, cmd)
 	if err != nil {
 		log.Errorf("first query: %s", err.Error())
 	}
-	ni.it.Close()
+	if err := ni.it.Close(); err != nil {
+		log.Errorf("close iterator: %w", err)
+	}
 	ni.it = rows
 	return ni.Next(ctx)
 }
 
 func (ni *clickIterator) Last(pctx context.Context) bool {
 	ni.key = ""
-	ctx := clickhouse.Context(pctx, clickhouse.WithBlockBufferSize(10))
+	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
 	cmd := fmt.Sprintf("SELECT * FROM %s FINAL ORDER BY key DESC LIMIT 1", ni.table)
 	rows, err := ni.db.db.QueryContext(ctx, cmd)
 	if err != nil {
 		log.Errorf("last query: %s", err.Error())
 	}
-	ni.it.Close()
+	if err := ni.it.Close(); err != nil {
+		log.Errorf("close iterator: %w", err)
+	}
 	ni.it = rows
 	return ni.Next(ctx)
 }
@@ -478,13 +481,15 @@ func (ni *clickIterator) Next(ctx context.Context) bool {
 
 func (ni *clickIterator) Seek(pctx context.Context, key []byte) bool {
 	ni.key = ""
-	ctx := clickhouse.Context(pctx, clickhouse.WithBlockBufferSize(10))
+	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
 	cmd := fmt.Sprintf("SELECT * FROM %s FINAL WHERE key >= $1", ni.table)
 	rows, err := ni.db.db.QueryContext(ctx, cmd, string(key))
 	if err != nil {
 		log.Errorf("seek query: %s", err.Error())
 	}
-	ni.it.Close()
+	if err := ni.it.Close(); err != nil {
+		log.Errorf("close iterator: %w", err)
+	}
 	ni.it = rows
 	return ni.Next(ctx)
 }
@@ -526,27 +531,31 @@ type clickRange struct {
 
 func (ni *clickRange) First(pctx context.Context) bool {
 	ni.key = ""
-	ctx := clickhouse.Context(pctx, clickhouse.WithBlockBufferSize(10))
+	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
 	cmd := fmt.Sprintf("SELECT * FROM %s FINAL WHERE key >= $1 AND key < $2", ni.table)
 	rows, err := ni.db.db.QueryContext(ctx, cmd, ni.start, ni.end)
 	if err != nil {
 		log.Errorf("first query: %s", err.Error())
 	}
-	ni.it.Close()
+	if err := ni.it.Close(); err != nil {
+		log.Errorf("close iterator: %w", err)
+	}
 	ni.it = rows
 	return ni.Next(ctx)
 }
 
 func (ni *clickRange) Last(pctx context.Context) bool {
 	ni.key = ""
-	ctx := clickhouse.Context(pctx, clickhouse.WithBlockBufferSize(10))
+	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
 	cmd := fmt.Sprintf(`SELECT * FROM %s FINAL WHERE key >= $1 AND key < $2 
 	ORDER BY key DESC LIMIT 1`, ni.table)
 	rows, err := ni.db.db.QueryContext(ctx, cmd, ni.start, ni.end)
 	if err != nil {
 		log.Errorf("last query: %s", err.Error())
 	}
-	ni.it.Close()
+	if err := ni.it.Close(); err != nil {
+		log.Errorf("close iterator: %w", err)
+	}
 	ni.it = rows
 	return ni.Next(ctx)
 }
