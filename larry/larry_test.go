@@ -22,6 +22,7 @@ import (
 	"github.com/hemilabs/larry/larry/bbolt"
 	"github.com/hemilabs/larry/larry/bitcask"
 	"github.com/hemilabs/larry/larry/bunt"
+	"github.com/hemilabs/larry/larry/clickhouse"
 	"github.com/hemilabs/larry/larry/level"
 	"github.com/hemilabs/larry/larry/mongo"
 	"github.com/hemilabs/larry/larry/multi"
@@ -99,7 +100,8 @@ func dbputDuplicate(ctx context.Context, db larry.Database, table string, insert
 			return fmt.Errorf("get %v: %v %w", table, i, err)
 		}
 		if !bytes.Equal(rv, value) {
-			return fmt.Errorf("get unequal %v: %v", table, i)
+			return fmt.Errorf("get unequal %v %v: got %v, expected %v",
+				table, i, rv, value)
 		}
 	}
 	return nil
@@ -428,15 +430,12 @@ func dbTransactionsRollback(ctx context.Context, db larry.Database, tables []str
 	}
 	defer func() {
 		if err != nil {
-			err = tx.Rollback(ctx)
-			if err != nil {
-				panic(fmt.Errorf("tx rollback: %w", err))
-			}
+			tx.Rollback(ctx)
 		}
 	}()
 	err = txputs(ctx, tx, tables, insertCount)
 	if err != nil {
-		return fmt.Errorf("dbgetsNegative: %w", err)
+		return fmt.Errorf("txputs: %w", err)
 	}
 	err = tx.Rollback(ctx)
 	if err != nil {
@@ -444,7 +443,7 @@ func dbTransactionsRollback(ctx context.Context, db larry.Database, tables []str
 	}
 	err = dbhasNegative(ctx, db, tables, insertCount)
 	if err != nil {
-		return fmt.Errorf("dbgetsNegative: %w", err)
+		return fmt.Errorf("dbhasNegative: %w", err)
 	}
 	return nil
 }
@@ -458,15 +457,12 @@ func dbTransactionsCommit(ctx context.Context, db larry.Database, tables []strin
 	}
 	defer func() {
 		if err != nil {
-			err = tx.Rollback(ctx)
-			if err != nil && !errors.Is(err, larry.ErrDBClosed) {
-				panic(fmt.Errorf("tx rollback: %w", err))
-			}
+			tx.Rollback(ctx)
 		}
 	}()
 	err = txputs(ctx, tx, tables, insertCount)
 	if err != nil {
-		return fmt.Errorf("dbgetsNegative: %w", err)
+		return fmt.Errorf("txputs: %w", err)
 	}
 	err = tx.Commit(ctx)
 	if err != nil {
@@ -474,9 +470,8 @@ func dbTransactionsCommit(ctx context.Context, db larry.Database, tables []strin
 	}
 	err = dbgets(ctx, db, tables, insertCount)
 	if err != nil {
-		return fmt.Errorf("dbgetsNegative: %w", err)
+		return fmt.Errorf("dbgets: %w", err)
 	}
-
 	return nil
 }
 
@@ -499,10 +494,7 @@ func dbTransactionsMultipleWrite(ctx context.Context, db larry.Database, table s
 			}
 			defer func() {
 				if err != nil {
-					err = tx.Rollback(ctx)
-					if err != nil && !errors.Is(err, larry.ErrDBClosed) {
-						panic(fmt.Errorf("tx%d - tx rollback: %w", i, err))
-					}
+					tx.Rollback(ctx)
 				}
 			}()
 
@@ -547,10 +539,7 @@ func dbTransactionsDelete(ctx context.Context, db larry.Database, tables []strin
 	}
 	defer func() {
 		if err != nil {
-			err = tx.Rollback(ctx)
-			if err != nil && !errors.Is(err, larry.ErrDBClosed) {
-				panic(fmt.Errorf("tx rollback: %w", err))
-			}
+			tx.Rollback(ctx)
 		}
 	}()
 	err = txdelsEven(ctx, tx, tables, insertCount)
@@ -577,10 +566,7 @@ func dbTransactionsErrors(ctx context.Context, db larry.Database, tables []strin
 	}
 	defer func() {
 		if err != nil {
-			err = tx.Rollback(ctx)
-			if err != nil && !errors.Is(err, larry.ErrDBClosed) {
-				panic(fmt.Errorf("tx rollback: %w", err))
-			}
+			tx.Rollback(ctx)
 		}
 	}()
 	err = txputEmpty(ctx, tx, tables)
@@ -866,7 +852,7 @@ func dbBatch(ctx context.Context, db larry.Database, table string, recordCount i
 		return tx.Write(ctx, b)
 	})
 	if err != nil {
-		return fmt.Errorf("update: %w", err)
+		return fmt.Errorf("update 1: %w", err)
 	}
 
 	// Read everything back and create a batch to delete all keys.
@@ -896,7 +882,7 @@ func dbBatch(ctx context.Context, db larry.Database, table string, recordCount i
 		return txn.Write(ctx, bd)
 	})
 	if err != nil {
-		return fmt.Errorf("update: %w", err)
+		return fmt.Errorf("update 2: %w", err)
 	}
 
 	return nil
@@ -1105,22 +1091,60 @@ func getDBs() []TestTableItem {
 		)
 	}
 
+	clickURI := os.Getenv("CLICKHOUSE_TEST_URI")
+	if clickURI != "" {
+		dbs = append(dbs,
+			TestTableItem{
+				name: "clickhouse",
+				dbFunc: func(home string, tables []string) larry.Database {
+					cfg := clickhouse.ClickConfig{
+						URI:        clickURI,
+						Tables:     tables,
+						DropTables: true,
+					}
+					db, err := clickhouse.NewClickDB(&cfg)
+					if err != nil {
+						panic(err)
+					}
+					return db
+				},
+			},
+		)
+	}
+
 	return dbs
 }
 
-func mongoReopen(tables []string) larry.Database {
-	mongoURI := os.Getenv("MONGO_TEST_URI")
-	if mongoURI != "" {
-		cfg := mongo.MongoConfig{
-			URI:        mongoURI,
-			Tables:     tables,
-			DropTables: true,
+func reopen(name string, tables []string) larry.Database {
+	switch name {
+	case "mongodb":
+		mongoURI := os.Getenv("MONGO_TEST_URI")
+		if mongoURI != "" {
+			cfg := mongo.MongoConfig{
+				URI:        mongoURI,
+				Tables:     tables,
+				DropTables: false,
+			}
+			db, err := mongo.NewMongoDB(&cfg)
+			if err != nil {
+				panic(err)
+			}
+			return db
 		}
-		db, err := mongo.NewMongoDB(&cfg)
-		if err != nil {
-			panic(err)
+	case "clickhouse":
+		clickURI := os.Getenv("CLICKHOUSE_TEST_URI")
+		if clickURI != "" {
+			cfg := clickhouse.ClickConfig{
+				URI:        clickURI,
+				Tables:     tables,
+				DropTables: false,
+			}
+			db, err := clickhouse.NewClickDB(&cfg)
+			if err != nil {
+				panic(err)
+			}
+			return db
 		}
-		return db
 	}
 	return nil
 }
@@ -1275,13 +1299,13 @@ func TestLarry(t *testing.T) {
 					}
 				}()
 
-				if tti.name == "mongodb" {
+				if tti.name == "mongodb" || tti.name == "clickhouse" {
 					err := db.Close(ctx)
 					if err != nil {
 						t.Fatal(err)
 					}
 
-					db = mongoReopen(tables)
+					db = reopen(tti.name, tables)
 					err = db.Open(ctx)
 					if err != nil {
 						t.Fatal(err)
