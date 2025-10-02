@@ -14,7 +14,7 @@ import (
 
 const logLevel = "INFO"
 
-var log = loggo.GetLogger("larry")
+var _ = loggo.GetLogger("larry")
 
 func init() {
 	if err := loggo.ConfigureLoggers(logLevel); err != nil {
