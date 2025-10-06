@@ -1588,6 +1588,106 @@ func TestDumpRestorePipeline(t *testing.T) {
 	}
 }
 
+func TestClone(t *testing.T) {
+	home := t.TempDir()
+
+	tableCount := 5
+	tables := make([]string, 0, tableCount)
+	for i := range tableCount {
+		tables = append(tables, fmt.Sprintf("table%v", i))
+	}
+
+	srcCfg := level.DefaultLevelConfig(filepath.Join(home, "source"), tables)
+	source, err := level.NewLevelDB(srcCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	err = source.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		err := source.Close(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	// Puts
+	insertCount := 18999
+	err = dbputs(ctx, source, tables, insertCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get
+	err = dbgets(ctx, source, tables, insertCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Destination
+	dstCfg := level.DefaultLevelConfig(filepath.Join(home, "destination"), tables)
+	destination, err := level.NewLevelDB(dstCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = destination.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		err := destination.Close(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	larry.Verbose = true
+	larry.DefaultMaxRestoreChunk = 16384 // Many chunks
+	err = larry.Clone(ctx, source, destination, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get and has destination
+	err = dbhas(ctx, destination, tables, insertCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = dbgets(ctx, destination, tables, insertCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	insertCount++
+	err = source.Put(ctx, tables[4], newKey(4), newVal(10))
+	if err != nil {
+		t.Fatalf("put %v in %v: %v", 0, tables[0], err)
+	}
+	err = source.Put(ctx, tables[4], newKey(18999), newVal(18999))
+	if err != nil {
+		t.Fatalf("put %v in %v: %v", 0, tables[0], err)
+	}
+
+	err = larry.Clone(ctx, source, destination, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get and has destination
+	err = dbhas(ctx, destination, tables, insertCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = dbgets(ctx, destination, tables, insertCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func dbOpenCloseOpen(ctx context.Context, db larry.Database, table string) error {
 	// Open again expect fail
 	err := db.Open(ctx)
