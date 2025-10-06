@@ -218,9 +218,10 @@ func Clone(ctx context.Context, source, destination Database, tables []string) e
 		if dit.Last(ctx) {
 			recovered = dit.Key(ctx)
 			if Verbose {
-				log.Infof("resuming cloning from record: %x", recovered)
+				log.Infof("table: %v resuming from: %x", table, recovered)
 			}
 		}
+		dit.Close(ctx)
 		it, err := source.NewRange(ctx, table, recovered, []byte{0xff})
 		if err != nil {
 			return err
@@ -245,7 +246,7 @@ func Clone(ctx context.Context, source, destination Database, tables []string) e
 			if chunk > DefaultMaxRestoreChunk {
 				// Commit chunk.
 				if Verbose {
-					log.Infof("table: %v cloned %v",
+					log.Infof("table: %v copied %v",
 						table,
 						humanize.IBytes(uint64(total)))
 				}
@@ -265,7 +266,7 @@ func Clone(ctx context.Context, source, destination Database, tables []string) e
 		}
 	}
 	if Verbose {
-		log.Infof("tables cloned %v total bytes cloned %v in %v",
+		log.Infof("tables copied %v total bytes copied %v in %v",
 			len(tables), humanize.IBytes(uint64(total)),
 			time.Since(start))
 	}
