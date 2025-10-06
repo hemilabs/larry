@@ -12,6 +12,7 @@ import (
 	"github.com/hemilabs/larry/larry"
 	"github.com/juju/loggo"
 	"github.com/syndtr/goleveldb/leveldb"
+	"github.com/syndtr/goleveldb/leveldb/filter"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
 	"github.com/syndtr/goleveldb/leveldb/opt"
 	"github.com/syndtr/goleveldb/leveldb/util"
@@ -88,6 +89,7 @@ func (b *levelDB) Open(_ context.Context) error {
 	ldb, err := leveldb.OpenFile(b.cfg.Home, &opt.Options{
 		BlockCacheEvictRemoved: true,
 		Compression:            opt.NoCompression,
+		Filter:                 filter.NewBloomFilter(10),
 	})
 	if err != nil {
 		return xerr(err)
