@@ -219,9 +219,13 @@ func (b *pebbleDB) NewRange(ctx context.Context, table string, start, end []byte
 		return nil, larry.ErrTableNotFound
 	}
 
+	_, endKey := larry.BytesPrefix(larry.NewCompositeKey(table, nil))
+	if end != nil {
+		endKey = larry.NewCompositeKey(table, end)
+	}
 	opt := &pebble.IterOptions{
 		LowerBound: larry.NewCompositeKey(table, start),
-		UpperBound: larry.NewCompositeKey(table, end),
+		UpperBound: endKey,
 	}
 	iter, err := b.db.NewIterWithContext(ctx, opt)
 	if err != nil {

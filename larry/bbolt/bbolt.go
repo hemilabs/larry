@@ -387,19 +387,21 @@ type boltRange struct {
 
 func (nr *boltRange) First(_ context.Context) bool {
 	nr.key, nr.val = nr.it.Seek(nr.start)
-	if bytes.Compare(nr.key, nr.end) >= 0 {
+	if nr.end != nil && bytes.Compare(nr.key, nr.end) >= 0 {
 		nr.key, nr.val = nil, nil
 	}
 	return nr.key != nil
 }
 
 func (nr *boltRange) Last(_ context.Context) bool {
-	nr.key, nr.val = nr.it.Seek(nr.end)
+	if nr.end != nil {
+		nr.key, nr.val = nr.it.Seek(nr.end)
+	}
 	if nr.key == nil {
 		nr.key, nr.val = nr.it.Last()
 	}
 	for nr.key != nil {
-		if bytes.Compare(nr.key, nr.end) < 0 {
+		if nr.end == nil || bytes.Compare(nr.key, nr.end) < 0 {
 			return true
 		}
 		nr.key, nr.val = nr.it.Prev()
@@ -413,7 +415,7 @@ func (nr *boltRange) Next(ctx context.Context) bool {
 		return nr.First(ctx)
 	}
 	nr.key, nr.val = nr.it.Next()
-	if bytes.Compare(nr.key, nr.end) >= 0 {
+	if nr.end != nil && bytes.Compare(nr.key, nr.end) >= 0 {
 		nr.key, nr.val = nil, nil
 	}
 	return nr.key != nil

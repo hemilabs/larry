@@ -218,6 +218,10 @@ func (b *nutsDB) NewRange(ctx context.Context, table string, start, end []byte) 
 		ntx:    tx.(*nutsTX).tx,
 		cursor: -1, // first key when next called
 	}
+	// XXX this is a hack
+	if end == nil {
+		end = []byte{byte(0xff)}
+	}
 	keys, _, err := nr.ntx.RangeScanEntries(nr.table, start, end, true, false)
 	if err != nil {
 		// Kill tx

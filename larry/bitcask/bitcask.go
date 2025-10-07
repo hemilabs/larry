@@ -219,7 +219,10 @@ func (b *bitcaskDB) NewRange(ctx context.Context, table string, start, end []byt
 		}
 	}()
 
-	endKey := larry.NewCompositeKey(table, end)
+	_, endKey := larry.BytesPrefix(larry.NewCompositeKey(table, nil))
+	if end != nil {
+		endKey = larry.NewCompositeKey(table, end)
+	}
 	startKey := larry.NewCompositeKey(table, start)
 	item, err := revIt.SeekPrefix(b.k2b(table, nil))
 	if err != nil {

@@ -259,11 +259,16 @@ func (b *badgerDB) NewRange(ctx context.Context, table string, start, end []byte
 	revIt := tx.NewIterator(opts)
 	defer revIt.Close()
 
+	_, endKey := larry.BytesPrefix(larry.NewCompositeKey(table, nil))
+	if end != nil {
+		endKey = larry.NewCompositeKey(table, end)
+	}
+
 	// XXX this is terrible, fix this
-	endKey := larry.NewCompositeKey(table, end)
 	revIt.Seek(endKey)
 	if !revIt.ValidForPrefix(opts.Prefix) {
 		it.Close()
+		revIt.Close()
 		tx.Discard()
 		return nil, errors.New("empty range")
 	}
@@ -271,6 +276,7 @@ func (b *badgerDB) NewRange(ctx context.Context, table string, start, end []byte
 		revIt.Next()
 		if !revIt.ValidForPrefix(opts.Prefix) {
 			it.Close()
+			revIt.Close()
 			tx.Discard()
 			return nil, errors.New("empty range")
 		}
@@ -442,7 +448,7 @@ type badgerRange struct {
 
 func (nr *badgerRange) First(_ context.Context) bool {
 	nr.it.Seek(nr.start)
-	if bytes.Compare(nr.it.Item().Key(), nr.lastKey) > 0 {
+	if !nr.it.Valid() || bytes.Compare(nr.it.Item().Key(), nr.lastKey) > 0 {
 		return false
 	}
 	return nr.it.ValidForPrefix(nr.prefix)
@@ -450,7 +456,7 @@ func (nr *badgerRange) First(_ context.Context) bool {
 
 func (nr *badgerRange) Last(_ context.Context) bool {
 	nr.it.Seek(nr.lastKey)
-	if bytes.Compare(nr.it.Item().Key(), nr.lastKey) > 0 {
+	if !nr.it.Valid() || bytes.Compare(nr.it.Item().Key(), nr.lastKey) > 0 {
 		return false
 	}
 	return nr.it.ValidForPrefix(nr.prefix)
@@ -462,7 +468,7 @@ func (nr *badgerRange) Next(ctx context.Context) bool {
 		return nr.First(ctx)
 	}
 	nr.it.Next()
-	if bytes.Compare(nr.it.Item().Key(), nr.lastKey) > 0 {
+	if !nr.it.Valid() || bytes.Compare(nr.it.Item().Key(), nr.lastKey) > 0 {
 		return false
 	}
 	return nr.it.ValidForPrefix(nr.prefix)

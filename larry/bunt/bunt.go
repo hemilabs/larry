@@ -237,11 +237,16 @@ func (b *buntDB) NewRange(ctx context.Context, table string, start, end []byte) 
 		return nil, fmt.Errorf("unexpected TX type: %T", tx)
 	}
 
+	_, endKey := larry.BytesPrefix(larry.NewCompositeKey(table, nil))
+	if end != nil {
+		endKey = larry.NewCompositeKey(table, end)
+	}
+
 	return &buntIterator{
 		table: table,
 		tx:    btx,
 		start: string(larry.NewCompositeKey(table, start)),
-		end:   string(larry.NewCompositeKey(table, end)),
+		end:   string(endKey),
 	}, nil
 }
 
