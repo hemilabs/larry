@@ -5,9 +5,11 @@
 package larry
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/juju/loggo"
 )
@@ -211,6 +213,22 @@ type Range interface {
 	Value(ctx context.Context) []byte
 
 	Close(ctx context.Context)
+}
+
+// NextByteSlice returns the next smallest byte slice
+// that is lexicographically greater than the input.
+func NextByteSlice(b []byte) (nb []byte) {
+	if len(b) < 1 {
+		nb = []byte{byte(0x00)}
+		return
+	}
+	nb = bytes.Clone(b)
+	if nb[len(nb)-1] < math.MaxUint8 {
+		nb[len(nb)-1]++
+		return
+	}
+	nb = append(nb, byte(0))
+	return
 }
 
 // Copyright (c) 2014, Suryandaru Triandana <syndtr@gmail.com>

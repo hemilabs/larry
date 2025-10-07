@@ -17,6 +17,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/hemilabs/larry/larry"
 	"github.com/hemilabs/larry/larry/badger"
 	"github.com/hemilabs/larry/larry/bbolt"
@@ -1647,7 +1648,7 @@ func TestClone(t *testing.T) {
 
 	larry.Verbose = true
 	larry.DefaultMaxRestoreChunk = 16384 // Many chunks
-	err = larry.Clone(ctx, source, destination, tables)
+	err = larry.Copy(ctx, true, source, destination, tables)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1672,9 +1673,22 @@ func TestClone(t *testing.T) {
 		t.Fatalf("put %v in %v: %v", 0, tables[0], err)
 	}
 
-	err = larry.Clone(ctx, source, destination, tables)
+	err = larry.Copy(ctx, true, source, destination, tables)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	// Ensure checkpoint worked
+	val, err := destination.Get(ctx, tables[4], newKey(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(val, newVal(10)) {
+		t.Fatal(fmt.Errorf("expected value not copied when using checkpoint"))
+	}
+	err = source.Put(ctx, tables[4], newKey(4), newVal(4))
+	if err != nil {
+		t.Fatalf("put %v in %v: %v", 0, tables[0], err)
 	}
 
 	// Get and has destination
@@ -1685,6 +1699,16 @@ func TestClone(t *testing.T) {
 	err = dbgets(ctx, destination, tables, insertCount)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	for _, tb := range tables {
+		eq, _, err := larry.Compare(ctx, false, source, destination, tb)
+		if err != nil {
+			t.Fatalf("%v: %v", tb, err)
+		}
+		if !eq {
+			t.Fatalf("%v: databases mismatch", tb)
+		}
 	}
 }
 
@@ -1777,7 +1801,7 @@ func TestCopy(t *testing.T) {
 
 	larry.Verbose = true
 	larry.DefaultMaxRestoreChunk = 16384 // Many chunks
-	err = larry.Copy(ctx, source, destination, tables)
+	err = larry.Copy(ctx, false, source, destination, tables)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1848,6 +1872,49 @@ func TestInvalidComposite(t *testing.T) {
 		}
 	}()
 	_ = larry.KeyFromComposite("table", []byte(""))
+}
+
+func TestNextByteSlice(t *testing.T) {
+	type testTableItem struct {
+		name     string
+		val      []byte
+		expected []byte
+	}
+	testTable := []testTableItem{
+		{
+			name:     "default",
+			val:      []byte("test0"),
+			expected: []byte("test1"),
+		},
+		{
+			name:     "empty",
+			val:      []byte{},
+			expected: []byte{byte(0x00)},
+		},
+		{
+			name:     "nil",
+			val:      nil,
+			expected: []byte{byte(0x00)},
+		},
+		{
+			name:     "max",
+			val:      []byte{byte(0xff), byte(0xff)},
+			expected: []byte{byte(0xff), byte(0xff), byte(0)},
+		},
+	}
+	for _, tti := range testTable {
+		t.Run(tti.name, func(t *testing.T) {
+			rb := larry.NextByteSlice(tti.val)
+			if !bytes.Equal(rb, tti.expected) {
+				t.Fatalf("NextByteSlice: got %v, expected %v",
+					spew.Sdump(rb), spew.Sdump(tti.expected))
+			}
+			if bytes.Compare(rb, tti.val) != 1 {
+				t.Fatal("expected returned value > sent")
+			}
+			spew.Dump()
+		})
+	}
 }
 
 // TODO tests

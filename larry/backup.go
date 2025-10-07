@@ -5,11 +5,13 @@
 package larry
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/dustin/go-humanize"
 )
 
@@ -149,80 +151,28 @@ func commitChunk(ctx context.Context, db Database, batch Batch) error {
 }
 
 // Copy makes a copy of the source database tables to destination.
-func Copy(ctx context.Context, source, destination Database, tables []string) error {
+func Copy(ctx context.Context, useCheckpoint bool, source, destination Database, tables []string) error {
 	total := 0
 	start := time.Now()
 	for _, table := range tables {
-		it, err := source.NewIterator(ctx, table)
-		if err != nil {
-			return err
-		}
-		defer func(i Iterator) {
-			// Just in case we exit with an error
-			i.Close(ctx)
-		}(it)
-
-		batch, err := destination.NewBatch(ctx)
-		if err != nil {
-			return err
-		}
-		chunk := 0
-		for it.Next(ctx) {
-			key := append([]byte{}, it.Key(ctx)...)
-			value := append([]byte{}, it.Value(ctx)...)
-			batch.Put(ctx, table, key, value)
-
-			chunk += len(key) + len(value)
-			total += len(key) + len(value)
-			if chunk > DefaultMaxRestoreChunk {
-				// Commit chunk.
-				if Verbose {
-					log.Infof("table: %v copied %v",
-						table,
-						humanize.IBytes(uint64(total)))
-				}
-				err = commitChunk(ctx, destination, batch)
-				if err != nil {
-					return err
-				}
-				chunk = 0
-			}
-		}
-		it.Close(ctx)
-
-		// Commit chunk.
-		err = commitChunk(ctx, destination, batch)
-		if err != nil {
-			return err
-		}
-	}
-	if Verbose {
-		log.Infof("tables copied %v total bytes copied %v in %v",
-			len(tables), humanize.IBytes(uint64(total)),
-			time.Since(start))
-	}
-	return nil
-}
-
-// Copy makes a copy of the source database tables to destination.
-func Clone(ctx context.Context, source, destination Database, tables []string) error {
-	total := 0
-	start := time.Now()
-	for _, table := range tables {
-		dit, err := destination.NewIterator(ctx, table)
-		if err != nil {
-			return err
-		}
-		defer dit.Close(ctx)
 		var recovered []byte
-		if dit.Last(ctx) {
-			recovered = dit.Key(ctx)
-			if Verbose {
-				log.Infof("table: %v resuming from: %x", table, recovered)
+		if useCheckpoint {
+			// get lexicographically greatest key from destination
+			// and resume inserting records from there
+			dit, err := destination.NewIterator(ctx, table)
+			if err != nil {
+				return err
 			}
+			defer dit.Close(ctx)
+			if dit.Last(ctx) {
+				recovered = NextByteSlice(dit.Key(ctx))
+				if Verbose {
+					log.Infof("table: %v resuming from: %x", table, recovered)
+				}
+			}
+			dit.Close(ctx)
 		}
-		dit.Close(ctx)
-		it, err := source.NewRange(ctx, table, recovered, []byte{0xff})
+		it, err := source.NewRange(ctx, table, recovered, nil)
 		if err != nil {
 			return err
 		}
@@ -271,4 +221,47 @@ func Clone(ctx context.Context, source, destination Database, tables []string) e
 			time.Since(start))
 	}
 	return nil
+}
+
+// Compare compares the records in source and checks if they exist
+// in the destination, and if the associated values are the same.
+// If includeDiff is set to true, the differing record keys are
+// also returned.
+func Compare(ctx context.Context, includeDiff bool, source, destination Database, table string) (bool, [][]byte, error) {
+	start := time.Now()
+	it, err := source.NewIterator(ctx, table)
+	if err != nil {
+		return false, nil, err
+	}
+	defer it.Close(ctx)
+	records := 0
+	diff := make([][]byte, 0)
+	for records = 0; it.Next(ctx); records++ {
+		v, err := destination.Get(ctx, table, it.Key(ctx))
+		if err != nil {
+			log.Debugf("%s: key %x not in destination", table, it.Key(ctx))
+			if !errors.Is(err, ErrKeyNotFound) {
+				return false, diff, err
+			}
+			if !includeDiff {
+				return false, nil, nil
+			}
+			diff = append(diff, it.Key(ctx))
+			continue
+		}
+		if !bytes.Equal(v, it.Value(ctx)) {
+			log.Debugf("%s: value for key %x: destination %s, source %s",
+				table, it.Key(ctx), spew.Sdump(v), spew.Sdump(it.Value(ctx)))
+			if !includeDiff {
+				return false, nil, nil
+			}
+			diff = append(diff, it.Key(ctx))
+		}
+	}
+	it.Close(ctx)
+	if Verbose {
+		log.Infof("%s: %d records verified in %v",
+			table, records, time.Since(start))
+	}
+	return len(diff) == 0, diff, nil
 }
