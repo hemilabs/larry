@@ -188,11 +188,15 @@ func (b *levelDB) NewRange(ctx context.Context, table string, start, end []byte)
 	if _, ok := b.tables[table]; !ok {
 		return nil, larry.ErrTableNotFound
 	}
+	r := util.BytesPrefix(larry.NewCompositeKey(table, nil))
+	if end != nil {
+		r.Limit = larry.NewCompositeKey(table, end)
+	}
 	return &levelRange{
 		table: table,
 		it: b.db.NewIterator(&util.Range{
 			Start: larry.NewCompositeKey(table, start),
-			Limit: larry.NewCompositeKey(table, end),
+			Limit: r.Limit,
 		}, nil),
 		start: start,
 		end:   end,
