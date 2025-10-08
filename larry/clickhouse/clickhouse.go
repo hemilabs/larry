@@ -448,8 +448,9 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 					for i := range delKeys {
 						plug += fmt.Sprintf("$%d, ", i+1)
 					}
-					stmt := fmt.Sprintf("DELETE FROM %s WHERE key IN (%s)",
-						op.table, plug)
+					stmt := fmt.Sprintf(`DELETE FROM %s WHERE key IN (%s) SETTINGS 
+					lightweight_delete_mode = 'lightweight_update', 
+					lightweight_deletes_sync = 0`, op.table, plug)
 					err := tx.tx.db.Exec(ctx, stmt, delKeys...)
 					if err != nil {
 						return fmt.Errorf("flush DEL batch: %w", err)
