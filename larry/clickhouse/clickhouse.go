@@ -318,7 +318,7 @@ func (tx *clickTX) Del(ctx context.Context, table string, key []byte) error {
 	if _, ok := tx.db.tables[table]; !ok {
 		return larry.ErrTableNotFound
 	}
-	cmd := fmt.Sprintf("ALTER TABLE %s DELETE WHERE key = $1", table)
+	cmd := fmt.Sprintf("DELETE FROM %s WHERE key = $1", table)
 	_, err := tx.tx.db.ExecContext(ctx, cmd, string(key))
 	return xerr(err)
 }
@@ -390,6 +390,7 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 		return fmt.Errorf("unexpected batch type: %T", b)
 	}
 	log.Infof("writing batch of size %v", bb.wb.Len())
+	i := 0
 	for e := bb.wb.Front(); e != nil; e = e.Next() {
 		op, ok := e.Value.(batchOp)
 		if !ok {
@@ -401,15 +402,28 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 		start := time.Now()
 		switch op.op {
 		case larry.OpDel:
-			pair := op.pairs.Front()
-			kv, ok := pair.Value.(kvPair)
-			if !ok {
-				return fmt.Errorf("opDel: expected kkPair, got %T", pair.Value)
+			keys := ""
+			for pair := op.pairs.Front(); pair != nil; pair = pair.Next() {
+				kv, ok := pair.Value.(kvPair)
+				if !ok {
+					return fmt.Errorf("opPut: expected kkPair, got %T", pair.Value)
+				}
+				keys += fmt.Sprintf("'%s',", string(kv.key))
 			}
-			if err := tx.Del(ctx, op.table, kv.key); err != nil {
+			keys = keys[:len(keys)-1]
+			stmt := fmt.Sprintf("ALTER TABLE %s DELETE WHERE key IN (%s)", op.table, keys)
+			_, err := tx.tx.db.ExecContext(ctx, stmt)
+			if err != nil {
 				return fmt.Errorf("opDel: %w", err)
 			}
-			log.Infof("wrote DEL in %v", time.Since(start))
+			// kv, ok := pair.Value.(kvPair)
+			// if !ok {
+			// 	return fmt.Errorf("opDel: expected kkPair, got %T", pair.Value)
+			// }
+			// if err := tx.Del(ctx, op.table, kv.key); err != nil {
+			// 	return fmt.Errorf("opDel: %w", err)
+			// }
+			// log.Infof("%v: wrote DEL in %v", i, time.Since(start))
 		case larry.OpPut:
 			scope, err := tx.tx.db.Begin()
 			if err != nil {
@@ -433,10 +447,11 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 			if err := scope.Commit(); err != nil {
 				return fmt.Errorf("opPut commit: %w", err)
 			}
-			log.Infof("wrote PUT in %v", time.Since(start))
+			log.Infof("%v: wrote PUT in %v", i, time.Since(start))
 		default:
 			return fmt.Errorf("unknown operation: %v", op.op)
 		}
+		i++
 	}
 	return nil
 }
@@ -613,6 +628,18 @@ type clickBatch struct {
 }
 
 func (nb *clickBatch) Del(ctx context.Context, table string, key []byte) {
+	l := nb.wb.Back()
+	if l != nil {
+		lop, ok := l.Value.(batchOp)
+		if !ok {
+			log.Errorf("unexpected batch element type %T", l.Value)
+			return
+		}
+		if lop.op == larry.OpDel && lop.table == table {
+			lop.pairs.PushBack(kvPair{key: key})
+			return
+		}
+	}
 	op := batchOp{op: larry.OpDel, table: table, pairs: new(list.List)}
 	op.pairs.PushBack(kvPair{key: key})
 	nb.wb.PushBack(op)
