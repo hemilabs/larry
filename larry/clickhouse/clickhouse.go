@@ -420,6 +420,14 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 		if _, ok := tx.db.tables[op.table]; !ok {
 			return larry.ErrTableNotFound
 		}
+		if i%50 == 0 {
+			start := time.Now()
+			err := tx.tx.db.Exec(ctx, fmt.Sprintf("OPTIMIZE TABLE %s", op.table))
+			if err != nil {
+				return fmt.Errorf("optimize table: %w", err)
+			}
+			log.Infof("%v: optimized %v in %v", i, op.table, time.Since(start))
+		}
 		switch op.op {
 		case larry.OpDel:
 			for pair := op.pairs.Front(); pair != nil; pair = pair.Next() {
