@@ -413,7 +413,7 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 	if !ok {
 		return fmt.Errorf("unexpected batch type: %T", b)
 	}
-	log.Infof("writing batch of size %v", bb.wb.Len()+1)
+	log.Debugf("writing batch of size %v", bb.wb.Len()+1)
 	bb.flushOps()
 	i := 1
 	for e := bb.wb.Front(); e != nil; e = e.Next() {
@@ -430,7 +430,7 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 			if err != nil {
 				return fmt.Errorf("optimize table: %w", err)
 			}
-			log.Infof("%v: optimized %v in %v", i, op.table, time.Since(start))
+			log.Debugf("%v: optimized %v in %v", i, op.table, time.Since(start))
 		}
 		switch op.op {
 		case larry.OpDel:
@@ -456,7 +456,7 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 					if err != nil {
 						return fmt.Errorf("flush DEL batch: %w", err)
 					}
-					log.Infof("%v: wrote DEL with %v keys in %v", i,
+					log.Debugf("%v: wrote DEL with %v keys in %v", i,
 						len(delKeys), time.Since(start))
 					delKeys = make([]any, 0, maxBatchDelKeys)
 				}
@@ -482,7 +482,7 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 			if err := batch.Send(); err != nil {
 				return fmt.Errorf("opPut commit: %w", err)
 			}
-			log.Infof("%v: wrote PUT in %v", i, time.Since(start))
+			log.Debugf("%v: wrote PUT in %v", i, time.Since(start))
 		default:
 			return fmt.Errorf("unknown operation: %v", op.op)
 		}
