@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	click "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/proto"
@@ -137,7 +138,7 @@ func (b *clickDB) Open(ctx context.Context) error {
     	CREATE TABLE IF NOT EXISTS %s (  
         key String,  
         value String  
-    	) ENGINE = ReplacingMergeTree ORDER BY (key)`, table))
+    	) ENGINE = MergeTree ORDER BY (key)`, table))
 		if err != nil {
 			return fmt.Errorf("create table %v: %w", table, err)
 		}
@@ -317,7 +318,7 @@ func (tx *clickTX) Del(ctx context.Context, table string, key []byte) error {
 	if _, ok := tx.db.tables[table]; !ok {
 		return larry.ErrTableNotFound
 	}
-	cmd := fmt.Sprintf("DELETE FROM %s WHERE key = $1", table)
+	cmd := fmt.Sprintf("ALTER TABLE %s DELETE WHERE key = $1", table)
 	_, err := tx.tx.db.ExecContext(ctx, cmd, string(key))
 	return xerr(err)
 }
@@ -388,6 +389,7 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 	if !ok {
 		return fmt.Errorf("unexpected batch type: %T", b)
 	}
+	log.Infof("writing batch of size %v", bb.wb.Len())
 	for e := bb.wb.Front(); e != nil; e = e.Next() {
 		op, ok := e.Value.(batchOp)
 		if !ok {
@@ -396,6 +398,7 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 		if _, ok := tx.db.tables[op.table]; !ok {
 			return larry.ErrTableNotFound
 		}
+		start := time.Now()
 		switch op.op {
 		case larry.OpDel:
 			pair := op.pairs.Front()
@@ -406,6 +409,7 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 			if err := tx.Del(ctx, op.table, kv.key); err != nil {
 				return fmt.Errorf("opDel: %w", err)
 			}
+			log.Infof("wrote DEL in %v", time.Since(start))
 		case larry.OpPut:
 			scope, err := tx.tx.db.Begin()
 			if err != nil {
@@ -429,6 +433,7 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 			if err := scope.Commit(); err != nil {
 				return fmt.Errorf("opPut commit: %w", err)
 			}
+			log.Infof("wrote PUT in %v", time.Since(start))
 		default:
 			return fmt.Errorf("unknown operation: %v", op.op)
 		}
