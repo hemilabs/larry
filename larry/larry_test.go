@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1362,6 +1363,27 @@ func TestLarry(t *testing.T) {
 					t.Fatal(err)
 				}
 			})
+
+			t.Run("hash table", func(t *testing.T) {
+				home := t.TempDir()
+				tables := []string{"ttab"}
+
+				db := tti.dbFunc(home, tables)
+				err := db.Open(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					err := db.Close(ctx)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}()
+
+				if err := dbHash(ctx, db, tables[0]); err != nil {
+					t.Fatal(err)
+				}
+			})
 		})
 	}
 }
@@ -1931,6 +1953,30 @@ func TestNextByteSlice(t *testing.T) {
 			spew.Dump()
 		})
 	}
+}
+
+func dbHash(ctx context.Context, b larry.Database, table string) error {
+	if err := b.Put(ctx, table, []byte("abc"), []byte("def")); err != nil {
+		return err
+	}
+	if err := b.Put(ctx, table, []byte("hello"), []byte("world")); err != nil {
+		return err
+	}
+	if err := b.Put(ctx, table, []byte("123"), []byte("456")); err != nil {
+		return err
+	}
+	hash, err := larry.HashTable(ctx, b, table)
+	if err != nil {
+		return fmt.Errorf("HashTable: %w", err)
+	}
+	expected, err := hex.DecodeString("f76f84c181e88c2e9e40fa3a24948d82ca1d4cb9f62c3aed192fcb04418790dc")
+	if err != nil {
+		panic("could not decode hash")
+	}
+	if !bytes.Equal(hash[:], expected) {
+		return fmt.Errorf("got %x, expected %x", hash, expected)
+	}
+	return nil
 }
 
 // TODO tests
