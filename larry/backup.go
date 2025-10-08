@@ -257,6 +257,10 @@ func Compare(ctx context.Context, includeDiff bool, source, destination Database
 			}
 			diff = append(diff, it.Key(ctx))
 		}
+		if records%1000 == 0 {
+			log.Infof("%s: %d records verified in %v",
+				table, records, time.Since(start))
+		}
 	}
 	it.Close(ctx)
 	if Verbose {
