@@ -143,7 +143,7 @@ func (b *clickDB) Open(ctx context.Context) error {
     	CREATE TABLE IF NOT EXISTS %s (  
         key String,  
         value String  
-    	) ENGINE = MergeTree ORDER BY (key) 
+    	) ENGINE = ReplacingMergeTree ORDER BY (key) 
 		SETTINGS enable_block_offset_column = 1, enable_block_number_column = 1`, table))
 		if err != nil {
 			return fmt.Errorf("create table %v: %w", table, err)
