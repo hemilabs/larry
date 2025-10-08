@@ -413,8 +413,9 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 	if !ok {
 		return fmt.Errorf("unexpected batch type: %T", b)
 	}
-	log.Infof("writing batch of size %v", bb.wb.Len())
-	i := 0
+	log.Infof("writing batch of size %v", bb.wb.Len()+1)
+	bb.flushOps()
+	i := 1
 	for e := bb.wb.Front(); e != nil; e = e.Next() {
 		op, ok := e.Value.(batchOp)
 		if !ok {
@@ -445,8 +446,8 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 				if len(delKeys) >= maxBatchDelKeys || pair == nil {
 					start := time.Now()
 					var plug string
-					for i := range delKeys {
-						plug += fmt.Sprintf("$%d, ", i+1)
+					for j := range delKeys {
+						plug += fmt.Sprintf("$%d, ", j+1)
 					}
 					stmt := fmt.Sprintf(`DELETE FROM %s WHERE key IN (%s) SETTINGS 
 					lightweight_delete_mode = 'lightweight_update', 
@@ -658,47 +659,44 @@ type batchOp struct {
 }
 
 type clickBatch struct {
-	wb *list.List // elements of type batchOp
+	wb     *list.List // elements of type batchOp
+	curMap map[string]batchOp
+	curOp  larry.OperationT
+}
+
+func (nb *clickBatch) flushOps() {
+	for _, bop := range nb.curMap {
+		nb.wb.PushBack(bop)
+	}
+	nb.curMap = make(map[string]batchOp)
 }
 
 func (nb *clickBatch) Del(ctx context.Context, table string, key []byte) {
-	for l := nb.wb.Back(); l != nil; l = l.Prev() {
-		lop, ok := l.Value.(batchOp)
-		if !ok {
-			log.Errorf("unexpected batch element type %T", l.Value)
-			return
-		}
-		if lop.op != larry.OpDel {
-			break
-		}
-		if lop.table == table {
-			lop.pairs.PushBack(kvPair{key: key})
-			return
-		}
+	if nb.curOp != larry.OpDel {
+		nb.flushOps()
+		nb.curOp = larry.OpDel
 	}
-	op := batchOp{op: larry.OpDel, table: table, pairs: new(list.List)}
-	op.pairs.PushBack(kvPair{key: key})
-	nb.wb.PushBack(op)
+	if bop, ok := nb.curMap[table]; ok {
+		bop.pairs.PushBack(kvPair{key: key})
+		return
+	}
+	bop := batchOp{op: larry.OpDel, table: table, pairs: new(list.List)}
+	bop.pairs.PushBack(kvPair{key: key})
+	nb.curMap[table] = bop
 }
 
 func (nb *clickBatch) Put(ctx context.Context, table string, key, value []byte) {
-	for l := nb.wb.Back(); l != nil; l = l.Prev() {
-		lop, ok := l.Value.(batchOp)
-		if !ok {
-			log.Errorf("unexpected batch element type %T", l.Value)
-			return
-		}
-		if lop.op != larry.OpPut {
-			break
-		}
-		if lop.table == table {
-			lop.pairs.PushBack(kvPair{key: key, value: value})
-			return
-		}
+	if nb.curOp != larry.OpPut {
+		nb.flushOps()
+		nb.curOp = larry.OpPut
 	}
-	op := batchOp{op: larry.OpPut, table: table, pairs: new(list.List)}
-	op.pairs.PushBack(kvPair{key: key, value: value})
-	nb.wb.PushBack(op)
+	if bop, ok := nb.curMap[table]; ok {
+		bop.pairs.PushBack(kvPair{key: key, value: value})
+		return
+	}
+	bop := batchOp{op: larry.OpPut, table: table, pairs: new(list.List)}
+	bop.pairs.PushBack(kvPair{key: key, value: value})
+	nb.curMap[table] = bop
 }
 
 func (nb *clickBatch) Reset(ctx context.Context) {
