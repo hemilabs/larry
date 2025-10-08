@@ -143,7 +143,8 @@ func (b *clickDB) Open(ctx context.Context) error {
     	CREATE TABLE IF NOT EXISTS %s (  
         key String,  
         value String  
-    	) ENGINE = ReplacingMergeTree ORDER BY (key)`, table))
+    	) ENGINE = MergeTree ORDER BY (key) 
+		SETTINGS enable_block_offset_column = 1, enable_block_number_column = 1`, table))
 		if err != nil {
 			return fmt.Errorf("create table %v: %w", table, err)
 		}
@@ -180,7 +181,7 @@ func (b *clickDB) Has(ctx context.Context, table string, key []byte) (bool, erro
 	if _, ok := b.tables[table]; !ok {
 		return false, larry.ErrTableNotFound
 	}
-	cmd := fmt.Sprintf("SELECT EXISTS(SELECT key FROM %s FINAL WHERE key = $1)", table)
+	cmd := fmt.Sprintf("SELECT EXISTS(SELECT key FROM %s  WHERE key = $1)", table)
 	var exists uint8
 	err := b.db.QueryRow(ctx, cmd, string(key)).Scan(&exists)
 	if err != nil {
@@ -194,7 +195,7 @@ func (b *clickDB) Get(ctx context.Context, table string, key []byte) ([]byte, er
 	if _, ok := b.tables[table]; !ok {
 		return nil, larry.ErrTableNotFound
 	}
-	cmd := fmt.Sprintf(`SELECT value FROM %s FINAL WHERE key = $1`, table)
+	cmd := fmt.Sprintf(`SELECT value FROM %s  WHERE key = $1`, table)
 	var val string
 	err := b.db.QueryRow(ctx, cmd, string(key)).Scan(&val)
 	if err != nil {
@@ -274,7 +275,7 @@ func (b *clickDB) NewIterator(pctx context.Context, table string) (larry.Iterato
 	// XXX PNOOMA
 	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
 
-	cmd := fmt.Sprintf("SELECT * FROM %s FINAL", table)
+	cmd := fmt.Sprintf("SELECT * FROM %s ", table)
 	rows, err := b.db.Query(ctx, cmd)
 	if err != nil {
 		return nil, err
@@ -299,13 +300,13 @@ func (b *clickDB) NewRange(pctx context.Context, table string, start, end []byte
 		err  error
 	)
 	if end != nil {
-		cmd := fmt.Sprintf("SELECT * FROM %s FINAL WHERE key >= $1 AND key < $2", table)
+		cmd := fmt.Sprintf("SELECT * FROM %s  WHERE key >= $1 AND key < $2", table)
 		rows, err = b.db.Query(ctx, cmd, string(start), string(end))
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		cmd := fmt.Sprintf("SELECT * FROM %s FINAL WHERE key >= $1", table)
+		cmd := fmt.Sprintf("SELECT * FROM %s  WHERE key >= $1", table)
 		rows, err = b.db.Query(ctx, cmd, string(start))
 		if err != nil {
 			return nil, err
@@ -336,7 +337,8 @@ func (tx *clickTX) Del(ctx context.Context, table string, key []byte) error {
 	if _, ok := tx.db.tables[table]; !ok {
 		return larry.ErrTableNotFound
 	}
-	cmd := fmt.Sprintf("DELETE FROM %s WHERE key = $1", table)
+	cmd := fmt.Sprintf(`DELETE FROM %s WHERE key = $1 SETTINGS 
+	lightweight_delete_mode = 'lightweight_update', lightweight_deletes_sync = 0`, table)
 	err := tx.tx.db.Exec(ctx, cmd, string(key))
 	return xerr(err)
 }
@@ -345,7 +347,7 @@ func (tx *clickTX) Has(ctx context.Context, table string, key []byte) (bool, err
 	if _, ok := tx.db.tables[table]; !ok {
 		return false, larry.ErrTableNotFound
 	}
-	cmd := fmt.Sprintf("SELECT EXISTS(SELECT key FROM %s FINAL WHERE key = $1)", table)
+	cmd := fmt.Sprintf("SELECT EXISTS(SELECT key FROM %s  WHERE key = $1)", table)
 	var exists int
 	err := tx.tx.db.QueryRow(ctx, cmd, string(key)).Scan(&exists)
 	if err != nil {
@@ -358,7 +360,7 @@ func (tx *clickTX) Get(ctx context.Context, table string, key []byte) ([]byte, e
 	if _, ok := tx.db.tables[table]; !ok {
 		return nil, larry.ErrTableNotFound
 	}
-	cmd := fmt.Sprintf("SELECT value FROM %s FINAL WHERE key = $1", table)
+	cmd := fmt.Sprintf("SELECT value FROM %s  WHERE key = $1", table)
 	var val string
 	err := tx.tx.db.QueryRow(ctx, cmd, string(key)).Scan(&val)
 	if err != nil {
@@ -472,7 +474,7 @@ type clickIterator struct {
 func (ni *clickIterator) First(pctx context.Context) bool {
 	ni.key = ""
 	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
-	cmd := fmt.Sprintf("SELECT * FROM %s FINAL", ni.table)
+	cmd := fmt.Sprintf("SELECT * FROM %s ", ni.table)
 	rows, err := ni.db.db.Query(ctx, cmd)
 	if err != nil {
 		log.Errorf("first query: %s", err.Error())
@@ -487,7 +489,7 @@ func (ni *clickIterator) First(pctx context.Context) bool {
 func (ni *clickIterator) Last(pctx context.Context) bool {
 	ni.key = ""
 	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
-	cmd := fmt.Sprintf("SELECT * FROM %s FINAL ORDER BY key DESC LIMIT 1", ni.table)
+	cmd := fmt.Sprintf("SELECT * FROM %s  ORDER BY key DESC LIMIT 1", ni.table)
 	rows, err := ni.db.db.Query(ctx, cmd)
 	if err != nil {
 		log.Errorf("last query: %s", err.Error())
@@ -507,7 +509,7 @@ func (ni *clickIterator) Next(ctx context.Context) bool {
 func (ni *clickIterator) Seek(pctx context.Context, key []byte) bool {
 	ni.key = ""
 	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
-	cmd := fmt.Sprintf("SELECT * FROM %s FINAL WHERE key >= $1", ni.table)
+	cmd := fmt.Sprintf("SELECT * FROM %s  WHERE key >= $1", ni.table)
 	rows, err := ni.db.db.Query(ctx, cmd, string(key))
 	if err != nil {
 		log.Errorf("seek query: %s", err.Error())
@@ -557,7 +559,7 @@ type clickRange struct {
 func (ni *clickRange) First(pctx context.Context) bool {
 	ni.key = ""
 	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
-	cmd := fmt.Sprintf("SELECT * FROM %s FINAL WHERE key >= $1 AND key < $2", ni.table)
+	cmd := fmt.Sprintf("SELECT * FROM %s  WHERE key >= $1 AND key < $2", ni.table)
 	rows, err := ni.db.db.Query(ctx, cmd, ni.start, ni.end)
 	if err != nil {
 		log.Errorf("first query: %s", err.Error())
@@ -572,7 +574,7 @@ func (ni *clickRange) First(pctx context.Context) bool {
 func (ni *clickRange) Last(pctx context.Context) bool {
 	ni.key = ""
 	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
-	cmd := fmt.Sprintf(`SELECT * FROM %s FINAL WHERE key >= $1 AND key < $2 
+	cmd := fmt.Sprintf(`SELECT * FROM %s  WHERE key >= $1 AND key < $2 
 	ORDER BY key DESC LIMIT 1`, ni.table)
 	rows, err := ni.db.db.Query(ctx, cmd, ni.start, ni.end)
 	if err != nil {

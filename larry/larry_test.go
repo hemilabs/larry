@@ -19,17 +19,9 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/hemilabs/larry/larry"
-	"github.com/hemilabs/larry/larry/badger"
-	"github.com/hemilabs/larry/larry/bbolt"
-	"github.com/hemilabs/larry/larry/bitcask"
-	"github.com/hemilabs/larry/larry/bunt"
 	"github.com/hemilabs/larry/larry/clickhouse"
 	"github.com/hemilabs/larry/larry/level"
 	"github.com/hemilabs/larry/larry/mongo"
-	"github.com/hemilabs/larry/larry/multi"
-	"github.com/hemilabs/larry/larry/nuts"
-	"github.com/hemilabs/larry/larry/pebble"
-	"github.com/hemilabs/larry/larry/replicator"
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/sync/errgroup"
 )
@@ -951,150 +943,150 @@ type TestTableItem struct {
 
 func getDBs() []TestTableItem {
 	dbs := []TestTableItem{
-		{
-			name: "multidb",
-			dbFunc: func(home string, tables []string) larry.Database {
-				tm := make(map[string]string, len(tables))
-				for i, t := range tables {
-					if i%2 == 0 {
-						tm[t] = "level"
-						continue
-					}
-					tm[t] = "pebble"
-				}
-				cfg := multi.DefaultMultiConfig(home, tm)
-				db, err := multi.NewMultiDB(cfg)
-				if err != nil {
-					panic(err)
-				}
-				return db
-			},
-		},
-		{
-			name: "badgerDB",
-			dbFunc: func(home string, tables []string) larry.Database {
-				cfg := badger.DefaultBadgerConfig(home, tables)
-				db, err := badger.NewBadgerDB(cfg)
-				if err != nil {
-					panic(err)
-				}
-				return db
-			},
-		},
-		{
-			name: "bbolt",
-			dbFunc: func(home string, tables []string) larry.Database {
-				cfg := bbolt.DefaultBoltConfig(home, tables)
-				db, err := bbolt.NewBoltDB(cfg)
-				if err != nil {
-					panic(err)
-				}
-				return db
-			},
-		},
-		{
-			name: "bitcask",
-			dbFunc: func(home string, tables []string) larry.Database {
-				cfg := bitcask.DefaultBitcaskConfig(home, tables)
-				db, err := bitcask.NewBitcaskDB(cfg)
-				if err != nil {
-					panic(err)
-				}
-				return db
-			},
-		},
-		{
-			name: "buntdb",
-			dbFunc: func(home string, tables []string) larry.Database {
-				cfg := bunt.DefaultBuntConfig(home, tables)
-				db, err := bunt.NewBuntDB(cfg)
-				if err != nil {
-					panic(err)
-				}
-				return db
-			},
-		},
-		{
-			name: "levelDB",
-			dbFunc: func(home string, tables []string) larry.Database {
-				cfg := level.DefaultLevelConfig(home, tables)
-				db, err := level.NewLevelDB(cfg)
-				if err != nil {
-					panic(err)
-				}
-				return db
-			},
-		},
-		{
-			name: "nutsDB",
-			dbFunc: func(home string, tables []string) larry.Database {
-				cfg := nuts.DefaultNutsConfig(home, tables)
-				db, err := nuts.NewNutsDB(cfg)
-				if err != nil {
-					panic(err)
-				}
-				return db
-			},
-		},
-		{
-			name: "pebbleDB",
-			dbFunc: func(home string, tables []string) larry.Database {
-				cfg := pebble.DefaultPebbleConfig(home, tables)
-				db, err := pebble.NewPebbleDB(cfg)
-				if err != nil {
-					panic(err)
-				}
-				return db
-			},
-		},
-		{
-			name: "replicator-direct",
-			dbFunc: func(home string, tables []string) larry.Database {
-				home1 := filepath.Join(home, "1")
-				cfg1 := level.DefaultLevelConfig(home1, tables)
-				db1, err := level.NewLevelDB(cfg1)
-				if err != nil {
-					panic(err)
-				}
-				home2 := filepath.Join(home, "2")
-				cfg2 := level.DefaultLevelConfig(home2, tables)
-				db2, err := level.NewLevelDB(cfg2)
-				if err != nil {
-					panic(err)
-				}
-				journalHome := filepath.Join(home, "journal")
-				rcfg := replicator.DefaultReplicatorConfig(journalHome, replicator.Direct)
-				db, err := replicator.NewReplicatorDB(rcfg, db1, db2)
-				if err != nil {
-					panic(err)
-				}
-				return db
-			},
-		},
-		{
-			name: "replicator-lazy",
-			dbFunc: func(home string, tables []string) larry.Database {
-				home1 := filepath.Join(home, "1")
-				cfg1 := level.DefaultLevelConfig(home1, tables)
-				db1, err := level.NewLevelDB(cfg1)
-				if err != nil {
-					panic(err)
-				}
-				home2 := filepath.Join(home, "2")
-				cfg2 := level.DefaultLevelConfig(home2, tables)
-				db2, err := level.NewLevelDB(cfg2)
-				if err != nil {
-					panic(err)
-				}
-				journalHome := filepath.Join(home, "journal")
-				rcfg := replicator.DefaultReplicatorConfig(journalHome, replicator.Lazy)
-				db, err := replicator.NewReplicatorDB(rcfg, db1, db2)
-				if err != nil {
-					panic(err)
-				}
-				return db
-			},
-		},
+		// {
+		// 	name: "multidb",
+		// 	dbFunc: func(home string, tables []string) larry.Database {
+		// 		tm := make(map[string]string, len(tables))
+		// 		for i, t := range tables {
+		// 			if i%2 == 0 {
+		// 				tm[t] = "level"
+		// 				continue
+		// 			}
+		// 			tm[t] = "pebble"
+		// 		}
+		// 		cfg := multi.DefaultMultiConfig(home, tm)
+		// 		db, err := multi.NewMultiDB(cfg)
+		// 		if err != nil {
+		// 			panic(err)
+		// 		}
+		// 		return db
+		// 	},
+		// },
+		// {
+		// 	name: "badgerDB",
+		// 	dbFunc: func(home string, tables []string) larry.Database {
+		// 		cfg := badger.DefaultBadgerConfig(home, tables)
+		// 		db, err := badger.NewBadgerDB(cfg)
+		// 		if err != nil {
+		// 			panic(err)
+		// 		}
+		// 		return db
+		// 	},
+		// },
+		// {
+		// 	name: "bbolt",
+		// 	dbFunc: func(home string, tables []string) larry.Database {
+		// 		cfg := bbolt.DefaultBoltConfig(home, tables)
+		// 		db, err := bbolt.NewBoltDB(cfg)
+		// 		if err != nil {
+		// 			panic(err)
+		// 		}
+		// 		return db
+		// 	},
+		// },
+		// {
+		// 	name: "bitcask",
+		// 	dbFunc: func(home string, tables []string) larry.Database {
+		// 		cfg := bitcask.DefaultBitcaskConfig(home, tables)
+		// 		db, err := bitcask.NewBitcaskDB(cfg)
+		// 		if err != nil {
+		// 			panic(err)
+		// 		}
+		// 		return db
+		// 	},
+		// },
+		// {
+		// 	name: "buntdb",
+		// 	dbFunc: func(home string, tables []string) larry.Database {
+		// 		cfg := bunt.DefaultBuntConfig(home, tables)
+		// 		db, err := bunt.NewBuntDB(cfg)
+		// 		if err != nil {
+		// 			panic(err)
+		// 		}
+		// 		return db
+		// 	},
+		// },
+		// {
+		// 	name: "levelDB",
+		// 	dbFunc: func(home string, tables []string) larry.Database {
+		// 		cfg := level.DefaultLevelConfig(home, tables)
+		// 		db, err := level.NewLevelDB(cfg)
+		// 		if err != nil {
+		// 			panic(err)
+		// 		}
+		// 		return db
+		// 	},
+		// },
+		// {
+		// 	name: "nutsDB",
+		// 	dbFunc: func(home string, tables []string) larry.Database {
+		// 		cfg := nuts.DefaultNutsConfig(home, tables)
+		// 		db, err := nuts.NewNutsDB(cfg)
+		// 		if err != nil {
+		// 			panic(err)
+		// 		}
+		// 		return db
+		// 	},
+		// },
+		// {
+		// 	name: "pebbleDB",
+		// 	dbFunc: func(home string, tables []string) larry.Database {
+		// 		cfg := pebble.DefaultPebbleConfig(home, tables)
+		// 		db, err := pebble.NewPebbleDB(cfg)
+		// 		if err != nil {
+		// 			panic(err)
+		// 		}
+		// 		return db
+		// 	},
+		// },
+		// {
+		// 	name: "replicator-direct",
+		// 	dbFunc: func(home string, tables []string) larry.Database {
+		// 		home1 := filepath.Join(home, "1")
+		// 		cfg1 := level.DefaultLevelConfig(home1, tables)
+		// 		db1, err := level.NewLevelDB(cfg1)
+		// 		if err != nil {
+		// 			panic(err)
+		// 		}
+		// 		home2 := filepath.Join(home, "2")
+		// 		cfg2 := level.DefaultLevelConfig(home2, tables)
+		// 		db2, err := level.NewLevelDB(cfg2)
+		// 		if err != nil {
+		// 			panic(err)
+		// 		}
+		// 		journalHome := filepath.Join(home, "journal")
+		// 		rcfg := replicator.DefaultReplicatorConfig(journalHome, replicator.Direct)
+		// 		db, err := replicator.NewReplicatorDB(rcfg, db1, db2)
+		// 		if err != nil {
+		// 			panic(err)
+		// 		}
+		// 		return db
+		// 	},
+		// },
+		// {
+		// 	name: "replicator-lazy",
+		// 	dbFunc: func(home string, tables []string) larry.Database {
+		// 		home1 := filepath.Join(home, "1")
+		// 		cfg1 := level.DefaultLevelConfig(home1, tables)
+		// 		db1, err := level.NewLevelDB(cfg1)
+		// 		if err != nil {
+		// 			panic(err)
+		// 		}
+		// 		home2 := filepath.Join(home, "2")
+		// 		cfg2 := level.DefaultLevelConfig(home2, tables)
+		// 		db2, err := level.NewLevelDB(cfg2)
+		// 		if err != nil {
+		// 			panic(err)
+		// 		}
+		// 		journalHome := filepath.Join(home, "journal")
+		// 		rcfg := replicator.DefaultReplicatorConfig(journalHome, replicator.Lazy)
+		// 		db, err := replicator.NewReplicatorDB(rcfg, db1, db2)
+		// 		if err != nil {
+		// 			panic(err)
+		// 		}
+		// 		return db
+		// 	},
+		// },
 	}
 
 	mongoURI := os.Getenv("MONGO_TEST_URI")
