@@ -190,7 +190,14 @@ func (b *bitcaskDB) NewIterator(ctx context.Context, table string) (larry.Iterat
 
 	item, err := revIt.SeekPrefix(b.k2b(table, nil))
 	if err != nil || !bytes.HasPrefix(item.Key(), larry.NewCompositeKey(table, nil)) {
-		return nil, fmt.Errorf("empty iterator")
+		if err := it.Close(); err != nil {
+			log.Errorf("close iterator: %v", err)
+		}
+		dummy, cerr := larry.NewDummyDB(&larry.DummyConfig{Home: b.cfg.Home})
+		if cerr != nil {
+			return nil, fmt.Errorf("empty iterator")
+		}
+		return dummy.NewIterator(ctx, "")
 	}
 	lastKey := item.Key()
 
@@ -407,7 +414,7 @@ func (bi *bitcaskIterator) Value(_ context.Context) []byte {
 
 func (bi *bitcaskIterator) Close(ctx context.Context) {
 	if err := bi.it.Close(); err != nil {
-		log.Errorf("close iterator: %w", err)
+		log.Errorf("close iterator: %v", err)
 	}
 }
 
@@ -488,7 +495,7 @@ func (br *bitcaskRange) Value(_ context.Context) []byte {
 
 func (br *bitcaskRange) Close(ctx context.Context) {
 	if err := br.it.Close(); err != nil {
-		log.Errorf("close iterator: %w", err)
+		log.Errorf("close range: %v", err)
 	}
 }
 

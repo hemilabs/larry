@@ -460,7 +460,11 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 			if err != nil {
 				return fmt.Errorf("opPut: %w", err)
 			}
-			defer batch.Close()
+			defer func() {
+				if err := batch.Close(); err != nil {
+					log.Errorf("opPut: close batch: %v", err.Error())
+				}
+			}()
 			for pair := op.pairs.Front(); pair != nil; pair = pair.Next() {
 				kv, ok := pair.Value.(kvPair)
 				if !ok {
@@ -500,7 +504,7 @@ func (ni *clickIterator) First(pctx context.Context) bool {
 		log.Errorf("first query: %s", err.Error())
 	}
 	if err := ni.it.Close(); err != nil {
-		log.Errorf("close iterator: %w", err)
+		log.Errorf("close iterator: %v", err)
 	}
 	ni.it = rows
 	return ni.Next(ctx)
@@ -515,7 +519,7 @@ func (ni *clickIterator) Last(pctx context.Context) bool {
 		log.Errorf("last query: %s", err.Error())
 	}
 	if err := ni.it.Close(); err != nil {
-		log.Errorf("close iterator: %w", err)
+		log.Errorf("close iterator: %v", err)
 	}
 	ni.it = rows
 	return ni.Next(ctx)
@@ -535,7 +539,7 @@ func (ni *clickIterator) Seek(pctx context.Context, key []byte) bool {
 		log.Errorf("seek query: %s", err.Error())
 	}
 	if err := ni.it.Close(); err != nil {
-		log.Errorf("close iterator: %w", err)
+		log.Errorf("close iterator: %v", err)
 	}
 	ni.it = rows
 	return ni.Next(ctx)
@@ -588,7 +592,7 @@ func (ni *clickRange) First(pctx context.Context) bool {
 		log.Errorf("first query: %s", err.Error())
 	}
 	if err := ni.it.Close(); err != nil {
-		log.Errorf("close iterator: %w", err)
+		log.Errorf("close iterator: %v", err)
 	}
 	ni.it = rows
 	return ni.Next(ctx)
@@ -608,7 +612,7 @@ func (ni *clickRange) Last(pctx context.Context) bool {
 		log.Errorf("last query: %s", err.Error())
 	}
 	if err := ni.it.Close(); err != nil {
-		log.Errorf("close iterator: %w", err)
+		log.Errorf("close iterator: %v", err)
 	}
 	ni.it = rows
 	return ni.Next(ctx)

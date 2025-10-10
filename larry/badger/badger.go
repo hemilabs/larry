@@ -200,7 +200,7 @@ func (b *badgerDB) Update(ctx context.Context, callback func(ctx context.Context
 	return b.execute(ctx, true, callback)
 }
 
-func (b *badgerDB) NewIterator(ctx context.Context, table string) (larry.Iterator, error) {
+func (b *badgerDB) NewIterator(ctx context.Context, table string) (lit larry.Iterator, err error) {
 	if _, ok := b.tables[table]; !ok {
 		return nil, larry.ErrTableNotFound
 	}
@@ -216,29 +216,39 @@ func (b *badgerDB) NewIterator(ctx context.Context, table string) (larry.Iterato
 	// the value should always remain the same.
 	opts.Reverse = true
 	revIt := tx.NewIterator(opts)
-	defer revIt.Close()
+	defer func() {
+		revIt.Close()
+		if err != nil {
+			it.Close()
+			tx.Discard()
+			dummy, cerr := larry.NewDummyDB(&larry.DummyConfig{Home: b.cfg.Home})
+			if cerr == nil {
+				lit, err = dummy.NewIterator(ctx, "")
+				return
+			}
+		}
+	}()
 
 	revIt.Seek(larry.NewCompositeKey(table, []byte{0xff}))
 	if !revIt.ValidForPrefix(opts.Prefix) {
-		it.Close()
-		tx.Discard()
-		return nil, errors.New("empty iterator")
+		err = errors.New("empty iterator")
+		return
 	}
 
 	it.Seek(revIt.Item().KeyCopy(nil))
 	if !it.ValidForPrefix(opts.Prefix) {
-		it.Close()
-		tx.Discard()
-		return nil, errors.New("empty iterator")
+		err = errors.New("empty iterator")
+		return
 	}
 	lastKey := revIt.Item().KeyCopy(nil)
 
-	return &badgerIterator{
+	lit = &badgerIterator{
 		table:   table,
 		tx:      tx,
 		it:      it,
 		lastKey: lastKey,
-	}, nil
+	}
+	return
 }
 
 func (b *badgerDB) NewRange(ctx context.Context, table string, start, end []byte) (larry.Range, error) {

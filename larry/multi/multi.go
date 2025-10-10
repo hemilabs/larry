@@ -87,7 +87,7 @@ func (l *multiDB) openDB(ctx context.Context, db, name string) error {
 	if err := bhsDB.Open(ctx); err != nil {
 		return fmt.Errorf("db pool open %v: %w", db, err)
 	}
-	l.pool[name] = bhsDB
+	l.pool[filepath.Base(name)] = bhsDB
 
 	return nil
 }
@@ -386,7 +386,7 @@ func (ab *multiBatch) addInternalBatch(ctx context.Context, table string) error 
 
 func (ab *multiBatch) Del(ctx context.Context, table string, key []byte) {
 	if err := ab.addInternalBatch(ctx, table); err != nil {
-		log.Errorf("batch del %v: %w", table, err)
+		log.Errorf("batch del %v: %v", table, err)
 		return
 	}
 	ab.bts[table].Del(ctx, dbname, key)
@@ -394,7 +394,7 @@ func (ab *multiBatch) Del(ctx context.Context, table string, key []byte) {
 
 func (ab *multiBatch) Put(ctx context.Context, table string, key, value []byte) {
 	if err := ab.addInternalBatch(ctx, table); err != nil {
-		log.Errorf("batch put %v: %w", table, err)
+		log.Errorf("batch put %v: %v", table, err)
 		return
 	}
 	ab.bts[table].Put(ctx, dbname, key, value)
