@@ -5,11 +5,13 @@
 package larry
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/dustin/go-humanize"
 )
 
@@ -149,15 +151,32 @@ func commitChunk(ctx context.Context, db Database, batch Batch) error {
 }
 
 // Copy makes a copy of the source database tables to destination.
-func Copy(ctx context.Context, source, destination Database, tables []string) error {
+func Copy(ctx context.Context, useCheckpoint bool, source, destination Database, tables []string) error {
 	total := 0
 	start := time.Now()
 	for _, table := range tables {
-		it, err := source.NewIterator(ctx, table)
+		var recovered []byte
+		if useCheckpoint {
+			// get lexicographically greatest key from destination
+			// and resume inserting records from there
+			dit, err := destination.NewIterator(ctx, table)
+			if err != nil {
+				return err
+			}
+			defer dit.Close(ctx)
+			if dit.Last(ctx) {
+				recovered = NextByteSlice(dit.Key(ctx))
+				if Verbose {
+					log.Infof("table: %v resuming from: %x", table, recovered)
+				}
+			}
+			dit.Close(ctx)
+		}
+		it, err := source.NewRange(ctx, table, recovered, nil)
 		if err != nil {
 			return err
 		}
-		defer func(i Iterator) {
+		defer func(i Range) {
 			// Just in case we exit with an error
 			i.Close(ctx)
 		}(it)
@@ -202,4 +221,51 @@ func Copy(ctx context.Context, source, destination Database, tables []string) er
 			time.Since(start))
 	}
 	return nil
+}
+
+// Compare compares the records in source and checks if they exist
+// in the destination, and if the associated values are the same.
+// If includeDiff is set to true, the differing record keys are
+// also returned.
+func Compare(ctx context.Context, includeDiff bool, source, destination Database, table string) (bool, [][]byte, error) {
+	start := time.Now()
+	it, err := source.NewIterator(ctx, table)
+	if err != nil {
+		return false, nil, err
+	}
+	defer it.Close(ctx)
+	records := 0
+	diff := make([][]byte, 0)
+	for records = 0; it.Next(ctx); records++ {
+		v, err := destination.Get(ctx, table, it.Key(ctx))
+		if err != nil {
+			log.Debugf("%s: key %x not in destination", table, it.Key(ctx))
+			if !errors.Is(err, ErrKeyNotFound) {
+				return false, diff, err
+			}
+			if !includeDiff {
+				return false, nil, nil
+			}
+			diff = append(diff, it.Key(ctx))
+			continue
+		}
+		if !bytes.Equal(v, it.Value(ctx)) {
+			log.Debugf("%s: value for key %x: destination %s, source %s",
+				table, it.Key(ctx), spew.Sdump(v), spew.Sdump(it.Value(ctx)))
+			if !includeDiff {
+				return false, nil, nil
+			}
+			diff = append(diff, it.Key(ctx))
+		}
+		if records%1000 == 0 {
+			log.Infof("%s: %d records verified in %v",
+				table, records, time.Since(start))
+		}
+	}
+	it.Close(ctx)
+	if Verbose {
+		log.Infof("%s: %d records verified in %v",
+			table, records, time.Since(start))
+	}
+	return len(diff) == 0, diff, nil
 }

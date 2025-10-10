@@ -11,6 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	click "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/proto"
@@ -20,6 +23,9 @@ import (
 
 const (
 	logLevel = "INFO"
+
+	maxBatchDelKeys   = 100
+	batchOptimizeStep = 50
 )
 
 var log = loggo.GetLogger("clickhouse")
@@ -72,7 +78,7 @@ func DefaultClickConfig(URI string, tables []string) *ClickConfig {
 }
 
 type clickDB struct {
-	db     *sql.DB
+	db     driver.Conn
 	cfg    *ClickConfig
 	tables map[string]struct{}
 
@@ -114,8 +120,11 @@ func (b *clickDB) Open(ctx context.Context) error {
 	// 	fmt.Printf(format+"\n", v...)
 	// }
 
-	conn := click.OpenDB(opt)
-	if err := conn.PingContext(ctx); err != nil {
+	conn, err := click.Open(opt)
+	if err != nil {
+		return fmt.Errorf("open conn: %w", err)
+	}
+	if err := conn.Ping(ctx); err != nil {
 		if exception, ok := err.(*click.Exception); ok {
 			fmt.Printf("Exception [%d] %s \n%s\n", exception.Code, exception.Message, exception.StackTrace)
 		}
@@ -125,7 +134,7 @@ func (b *clickDB) Open(ctx context.Context) error {
 
 	if b.cfg.DropTables {
 		for _, table := range b.cfg.Tables {
-			_, err := conn.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS `%s`", table))
+			err := conn.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS `%s`", table))
 			if err != nil {
 				return fmt.Errorf("drop table %v: %w", table, err)
 			}
@@ -133,11 +142,12 @@ func (b *clickDB) Open(ctx context.Context) error {
 	}
 
 	for _, table := range b.cfg.Tables {
-		_, err := conn.ExecContext(ctx, fmt.Sprintf(`  
+		err := conn.Exec(ctx, fmt.Sprintf(`  
     	CREATE TABLE IF NOT EXISTS %s (  
         key String,  
         value String  
-    	) ENGINE = ReplacingMergeTree ORDER BY (key)`, table))
+    	) ENGINE = ReplacingMergeTree ORDER BY (key) 
+		SETTINGS enable_block_offset_column = 1, enable_block_number_column = 1`, table))
 		if err != nil {
 			return fmt.Errorf("create table %v: %w", table, err)
 		}
@@ -166,7 +176,7 @@ func (b *clickDB) Del(ctx context.Context, table string, key []byte) error {
 		return larry.ErrTableNotFound
 	}
 	cmd := fmt.Sprintf("DELETE FROM %s WHERE key = $1", table)
-	_, err := b.db.ExecContext(ctx, cmd, string(key))
+	err := b.db.Exec(ctx, cmd, string(key))
 	return xerr(err)
 }
 
@@ -175,8 +185,8 @@ func (b *clickDB) Has(ctx context.Context, table string, key []byte) (bool, erro
 		return false, larry.ErrTableNotFound
 	}
 	cmd := fmt.Sprintf("SELECT EXISTS(SELECT key FROM %s FINAL WHERE key = $1)", table)
-	var exists int
-	err := b.db.QueryRowContext(ctx, cmd, string(key)).Scan(&exists)
+	var exists uint8
+	err := b.db.QueryRow(ctx, cmd, string(key)).Scan(&exists)
 	if err != nil {
 		return false, xerr(err)
 	}
@@ -190,7 +200,7 @@ func (b *clickDB) Get(ctx context.Context, table string, key []byte) ([]byte, er
 	}
 	cmd := fmt.Sprintf(`SELECT value FROM %s FINAL WHERE key = $1`, table)
 	var val string
-	err := b.db.QueryRowContext(ctx, cmd, string(key)).Scan(&val)
+	err := b.db.QueryRow(ctx, cmd, string(key)).Scan(&val)
 	if err != nil {
 		return nil, xerr(err)
 	}
@@ -205,7 +215,7 @@ func (b *clickDB) Put(ctx context.Context, table string, key, value []byte) erro
 		return nil
 	}
 	cmd := fmt.Sprintf("INSERT INTO %s (key, value) VALUES ($1, $2)", table)
-	_, err := b.db.ExecContext(ctx, cmd, string(key), string(value))
+	err := b.db.Exec(ctx, cmd, string(key), string(value))
 	return xerr(err)
 }
 
@@ -220,7 +230,7 @@ func (b *clickDB) Begin(ctx context.Context, write bool) (larry.Transaction, err
 	if err := tx.Open(ctx); err != nil {
 		return nil, err
 	}
-	_, err = tx.db.ExecContext(ctx, "BEGIN TRANSACTION")
+	err = tx.db.Exec(ctx, "BEGIN TRANSACTION")
 	if err != nil {
 		if err := tx.Close(ctx); err != nil {
 			log.Errorf("tx begin: close tx db: %v", err)
@@ -268,8 +278,8 @@ func (b *clickDB) NewIterator(pctx context.Context, table string) (larry.Iterato
 	// XXX PNOOMA
 	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
 
-	cmd := fmt.Sprintf("SELECT * FROM %s FINAL", table)
-	rows, err := b.db.QueryContext(ctx, cmd)
+	cmd := fmt.Sprintf("SELECT * FROM %s FINAL ORDER BY key", table)
+	rows, err := b.db.Query(ctx, cmd)
 	if err != nil {
 		return nil, err
 	}
@@ -288,8 +298,13 @@ func (b *clickDB) NewRange(pctx context.Context, table string, start, end []byte
 	// XXX PNOOMA
 	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
 
-	cmd := fmt.Sprintf("SELECT * FROM %s FINAL WHERE key >= $1 AND key < $2", table)
-	rows, err := b.db.QueryContext(ctx, cmd, string(start), string(end))
+	cmd := fmt.Sprintf(`SELECT * FROM %s FINAL WHERE 
+		key >= $1`, table)
+	if end != nil {
+		cmd += " AND key < $2"
+	}
+	cmd += " ORDER BY key"
+	rows, err := b.db.Query(ctx, cmd, string(start), string(end))
 	if err != nil {
 		return nil, err
 	}
@@ -317,8 +332,9 @@ func (tx *clickTX) Del(ctx context.Context, table string, key []byte) error {
 	if _, ok := tx.db.tables[table]; !ok {
 		return larry.ErrTableNotFound
 	}
-	cmd := fmt.Sprintf("DELETE FROM %s WHERE key = $1", table)
-	_, err := tx.tx.db.ExecContext(ctx, cmd, string(key))
+	cmd := fmt.Sprintf(`DELETE FROM %s WHERE key = $1 SETTINGS 
+	lightweight_delete_mode = 'lightweight_update', lightweight_deletes_sync = 0`, table)
+	err := tx.tx.db.Exec(ctx, cmd, string(key))
 	return xerr(err)
 }
 
@@ -328,7 +344,7 @@ func (tx *clickTX) Has(ctx context.Context, table string, key []byte) (bool, err
 	}
 	cmd := fmt.Sprintf("SELECT EXISTS(SELECT key FROM %s FINAL WHERE key = $1)", table)
 	var exists int
-	err := tx.tx.db.QueryRowContext(ctx, cmd, string(key)).Scan(&exists)
+	err := tx.tx.db.QueryRow(ctx, cmd, string(key)).Scan(&exists)
 	if err != nil {
 		return false, xerr(err)
 	}
@@ -341,7 +357,7 @@ func (tx *clickTX) Get(ctx context.Context, table string, key []byte) ([]byte, e
 	}
 	cmd := fmt.Sprintf("SELECT value FROM %s FINAL WHERE key = $1", table)
 	var val string
-	err := tx.tx.db.QueryRowContext(ctx, cmd, string(key)).Scan(&val)
+	err := tx.tx.db.QueryRow(ctx, cmd, string(key)).Scan(&val)
 	if err != nil {
 		return nil, xerr(err)
 	}
@@ -356,12 +372,12 @@ func (tx *clickTX) Put(ctx context.Context, table string, key []byte, value []by
 		return nil
 	}
 	cmd := fmt.Sprintf("INSERT INTO %s (key, value) VALUES ($1, $2)", table)
-	_, err := tx.tx.db.ExecContext(ctx, cmd, string(key), string(value))
+	err := tx.tx.db.Exec(ctx, cmd, string(key), string(value))
 	return xerr(err)
 }
 
 func (tx *clickTX) Commit(ctx context.Context) error {
-	_, err := tx.tx.db.ExecContext(ctx, "COMMIT")
+	err := tx.tx.db.Exec(ctx, "COMMIT")
 	if err != nil {
 		return err
 	}
@@ -373,13 +389,14 @@ func (tx *clickTX) Commit(ctx context.Context) error {
 }
 
 func (tx *clickTX) Rollback(ctx context.Context) error {
-	defer func() {
-		if err := tx.tx.Close(ctx); err != nil {
-			log.Errorf("tx rollback: close tx db: %v", err)
-		}
-		tx.db.mtx.Unlock()
-	}()
-	_, err := tx.tx.db.ExecContext(ctx, "ROLLBACK")
+	err := tx.tx.db.Exec(ctx, "ROLLBACK")
+	if err != nil {
+		return err
+	}
+	defer tx.db.mtx.Unlock()
+	if err := tx.tx.Close(ctx); err != nil {
+		log.Errorf("tx rollback: close tx db: %v", err)
+	}
 	return err
 }
 
@@ -388,6 +405,9 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 	if !ok {
 		return fmt.Errorf("unexpected batch type: %T", b)
 	}
+	log.Debugf("writing batch of size %v", bb.wb.Len()+1)
+	bb.flushOps()
+	i := 1
 	for e := bb.wb.Front(); e != nil; e = e.Next() {
 		op, ok := e.Value.(batchOp)
 		if !ok {
@@ -396,49 +416,76 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 		if _, ok := tx.db.tables[op.table]; !ok {
 			return larry.ErrTableNotFound
 		}
+		if i%batchOptimizeStep == 0 {
+			start := time.Now()
+			err := tx.tx.db.Exec(ctx, fmt.Sprintf("OPTIMIZE TABLE %s", op.table))
+			if err != nil {
+				return fmt.Errorf("optimize table: %w", err)
+			}
+			log.Debugf("%v: optimized %v in %v", i, op.table, time.Since(start))
+		}
 		switch op.op {
 		case larry.OpDel:
+			delKeys := make([]any, 0, maxBatchDelKeys)
 			pair := op.pairs.Front()
-			kv, ok := pair.Value.(kvPair)
-			if !ok {
-				return fmt.Errorf("opDel: expected kkPair, got %T", pair.Value)
-			}
-			if err := tx.Del(ctx, op.table, kv.key); err != nil {
-				return fmt.Errorf("opDel: %w", err)
+			for pair != nil {
+				kv, ok := pair.Value.(kvPair)
+				if !ok {
+					return fmt.Errorf("opDel: expected kkPair, got %T", pair.Value)
+				}
+				pair = pair.Next()
+				delKeys = append(delKeys, string(kv.key))
+				if len(delKeys) >= maxBatchDelKeys || pair == nil {
+					start := time.Now()
+					var plug string
+					for j := range delKeys {
+						plug += fmt.Sprintf("$%d, ", j+1)
+					}
+					stmt := fmt.Sprintf(`DELETE FROM %s WHERE key IN (%s) SETTINGS 
+					lightweight_delete_mode = 'lightweight_update', 
+					lightweight_deletes_sync = 0`, op.table, plug)
+					err := tx.tx.db.Exec(ctx, stmt, delKeys...)
+					if err != nil {
+						return fmt.Errorf("flush DEL batch: %w", err)
+					}
+					log.Debugf("%v: wrote DEL with %v keys in %v", i,
+						len(delKeys), time.Since(start))
+					delKeys = make([]any, 0, maxBatchDelKeys)
+				}
 			}
 		case larry.OpPut:
-			scope, err := tx.tx.db.Begin()
-			if err != nil {
-				return err
-			}
-			stmt, err := scope.PrepareContext(ctx,
+			start := time.Now()
+			batch, err := tx.tx.db.PrepareBatch(ctx,
 				fmt.Sprintf("INSERT INTO %s", op.table))
 			if err != nil {
 				return fmt.Errorf("opPut: %w", err)
 			}
+			defer batch.Close()
 			for pair := op.pairs.Front(); pair != nil; pair = pair.Next() {
 				kv, ok := pair.Value.(kvPair)
 				if !ok {
 					return fmt.Errorf("opPut: expected kkPair, got %T", pair.Value)
 				}
-				_, err := stmt.ExecContext(ctx, string(kv.key), string(kv.value))
+				err := batch.Append(string(kv.key), string(kv.value))
 				if err != nil {
-					return fmt.Errorf("opPut: %w", err)
+					return fmt.Errorf("opPut batch append: %w", err)
 				}
 			}
-			if err := scope.Commit(); err != nil {
+			if err := batch.Send(); err != nil {
 				return fmt.Errorf("opPut commit: %w", err)
 			}
+			log.Debugf("%v: wrote PUT in %v", i, time.Since(start))
 		default:
 			return fmt.Errorf("unknown operation: %v", op.op)
 		}
+		i++
 	}
 	return nil
 }
 
 type clickIterator struct {
 	db    *clickDB
-	it    *sql.Rows
+	it    driver.Rows
 	table string
 
 	key, value string
@@ -447,8 +494,8 @@ type clickIterator struct {
 func (ni *clickIterator) First(pctx context.Context) bool {
 	ni.key = ""
 	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
-	cmd := fmt.Sprintf("SELECT * FROM %s FINAL", ni.table)
-	rows, err := ni.db.db.QueryContext(ctx, cmd)
+	cmd := fmt.Sprintf("SELECT * FROM %s FINAL ORDER BY key", ni.table)
+	rows, err := ni.db.db.Query(ctx, cmd)
 	if err != nil {
 		log.Errorf("first query: %s", err.Error())
 	}
@@ -463,7 +510,7 @@ func (ni *clickIterator) Last(pctx context.Context) bool {
 	ni.key = ""
 	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
 	cmd := fmt.Sprintf("SELECT * FROM %s FINAL ORDER BY key DESC LIMIT 1", ni.table)
-	rows, err := ni.db.db.QueryContext(ctx, cmd)
+	rows, err := ni.db.db.Query(ctx, cmd)
 	if err != nil {
 		log.Errorf("last query: %s", err.Error())
 	}
@@ -482,8 +529,8 @@ func (ni *clickIterator) Next(ctx context.Context) bool {
 func (ni *clickIterator) Seek(pctx context.Context, key []byte) bool {
 	ni.key = ""
 	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
-	cmd := fmt.Sprintf("SELECT * FROM %s FINAL WHERE key >= $1", ni.table)
-	rows, err := ni.db.db.QueryContext(ctx, cmd, string(key))
+	cmd := fmt.Sprintf("SELECT * FROM %s FINAL WHERE key >= $1 ORDER BY key", ni.table)
+	rows, err := ni.db.db.Query(ctx, cmd, string(key))
 	if err != nil {
 		log.Errorf("seek query: %s", err.Error())
 	}
@@ -522,7 +569,7 @@ func (ni *clickIterator) Close(ctx context.Context) {
 
 type clickRange struct {
 	db    *clickDB
-	it    *sql.Rows
+	it    driver.Rows
 	table string
 
 	start, end string
@@ -532,8 +579,11 @@ type clickRange struct {
 func (ni *clickRange) First(pctx context.Context) bool {
 	ni.key = ""
 	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
-	cmd := fmt.Sprintf("SELECT * FROM %s FINAL WHERE key >= $1 AND key < $2", ni.table)
-	rows, err := ni.db.db.QueryContext(ctx, cmd, ni.start, ni.end)
+	cmd := fmt.Sprintf("SELECT * FROM %s FINAL WHERE key >= $1", ni.table)
+	if ni.end != "" {
+		cmd += " AND key < $2"
+	}
+	rows, err := ni.db.db.Query(ctx, cmd, ni.start, ni.end)
 	if err != nil {
 		log.Errorf("first query: %s", err.Error())
 	}
@@ -547,9 +597,13 @@ func (ni *clickRange) First(pctx context.Context) bool {
 func (ni *clickRange) Last(pctx context.Context) bool {
 	ni.key = ""
 	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
-	cmd := fmt.Sprintf(`SELECT * FROM %s FINAL WHERE key >= $1 AND key < $2 
-	ORDER BY key DESC LIMIT 1`, ni.table)
-	rows, err := ni.db.db.QueryContext(ctx, cmd, ni.start, ni.end)
+	cmd := fmt.Sprintf(`SELECT * FROM %s FINAL 
+	WHERE key >= $1`, ni.table)
+	if ni.end != "" {
+		cmd += " AND key < $2"
+	}
+	cmd += " ORDER BY key DESC LIMIT 1"
+	rows, err := ni.db.db.Query(ctx, cmd, ni.start, ni.end)
 	if err != nil {
 		log.Errorf("last query: %s", err.Error())
 	}
@@ -604,31 +658,44 @@ type batchOp struct {
 }
 
 type clickBatch struct {
-	wb *list.List // elements of type batchOp
+	wb     *list.List // elements of type batchOp
+	curMap map[string]batchOp
+	curOp  larry.OperationT
+}
+
+func (nb *clickBatch) flushOps() {
+	for _, bop := range nb.curMap {
+		nb.wb.PushBack(bop)
+	}
+	nb.curMap = make(map[string]batchOp)
 }
 
 func (nb *clickBatch) Del(ctx context.Context, table string, key []byte) {
-	op := batchOp{op: larry.OpDel, table: table, pairs: new(list.List)}
-	op.pairs.PushBack(kvPair{key: key})
-	nb.wb.PushBack(op)
+	if nb.curOp != larry.OpDel {
+		nb.flushOps()
+		nb.curOp = larry.OpDel
+	}
+	if bop, ok := nb.curMap[table]; ok {
+		bop.pairs.PushBack(kvPair{key: key})
+		return
+	}
+	bop := batchOp{op: larry.OpDel, table: table, pairs: new(list.List)}
+	bop.pairs.PushBack(kvPair{key: key})
+	nb.curMap[table] = bop
 }
 
 func (nb *clickBatch) Put(ctx context.Context, table string, key, value []byte) {
-	l := nb.wb.Back()
-	if l != nil {
-		lop, ok := l.Value.(batchOp)
-		if !ok {
-			log.Errorf("unexpected batch element type %T", l.Value)
-			return
-		}
-		if lop.op == larry.OpPut && lop.table == table {
-			lop.pairs.PushBack(kvPair{key: key, value: value})
-			return
-		}
+	if nb.curOp != larry.OpPut {
+		nb.flushOps()
+		nb.curOp = larry.OpPut
 	}
-	op := batchOp{op: larry.OpPut, table: table, pairs: new(list.List)}
-	op.pairs.PushBack(kvPair{key: key, value: value})
-	nb.wb.PushBack(op)
+	if bop, ok := nb.curMap[table]; ok {
+		bop.pairs.PushBack(kvPair{key: key, value: value})
+		return
+	}
+	bop := batchOp{op: larry.OpPut, table: table, pairs: new(list.List)}
+	bop.pairs.PushBack(kvPair{key: key, value: value})
+	nb.curMap[table] = bop
 }
 
 func (nb *clickBatch) Reset(ctx context.Context) {

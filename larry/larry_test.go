@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/hemilabs/larry/larry"
 	"github.com/hemilabs/larry/larry/badger"
 	"github.com/hemilabs/larry/larry/bbolt"
@@ -911,6 +913,22 @@ func dbBatch(ctx context.Context, db larry.Database, table string, recordCount i
 		return fmt.Errorf("update 2: %w", err)
 	}
 
+	// Ensure everything got deleted
+	it, err = db.NewIterator(ctx, table)
+	if err != nil {
+		return fmt.Errorf("new iterator: %w", err)
+	}
+	defer it.Close(ctx)
+	i = 0
+	for it.Next(ctx) {
+		i++
+	}
+	if i != 0 {
+		return fmt.Errorf("invalid record count got %v, wanted %v", i, 0)
+	}
+	// Close iterator so that we don't block
+	it.Close(ctx)
+
 	return nil
 }
 
@@ -1345,6 +1363,27 @@ func TestLarry(t *testing.T) {
 					t.Fatal(err)
 				}
 			})
+
+			t.Run("hash table", func(t *testing.T) {
+				home := t.TempDir()
+				tables := []string{"ttab"}
+
+				db := tti.dbFunc(home, tables)
+				err := db.Open(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					err := db.Close(ctx)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}()
+
+				if err := dbHash(ctx, db, tables[0]); err != nil {
+					t.Fatal(err)
+				}
+			})
 		})
 	}
 }
@@ -1588,6 +1627,129 @@ func TestDumpRestorePipeline(t *testing.T) {
 	}
 }
 
+func TestClone(t *testing.T) {
+	home := t.TempDir()
+
+	tableCount := 5
+	tables := make([]string, 0, tableCount)
+	for i := range tableCount {
+		tables = append(tables, fmt.Sprintf("table%v", i))
+	}
+
+	srcCfg := level.DefaultLevelConfig(filepath.Join(home, "source"), tables)
+	source, err := level.NewLevelDB(srcCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	err = source.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		err := source.Close(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	// Puts
+	insertCount := 18999
+	err = dbputs(ctx, source, tables, insertCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get
+	err = dbgets(ctx, source, tables, insertCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Destination
+	dstCfg := level.DefaultLevelConfig(filepath.Join(home, "destination"), tables)
+	destination, err := level.NewLevelDB(dstCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = destination.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		err := destination.Close(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	larry.Verbose = true
+	larry.DefaultMaxRestoreChunk = 16384 // Many chunks
+	err = larry.Copy(ctx, true, source, destination, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get and has destination
+	err = dbhas(ctx, destination, tables, insertCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = dbgets(ctx, destination, tables, insertCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	insertCount++
+	err = source.Put(ctx, tables[4], newKey(4), newVal(10))
+	if err != nil {
+		t.Fatalf("put %v in %v: %v", 0, tables[0], err)
+	}
+	err = source.Put(ctx, tables[4], newKey(18999), newVal(18999))
+	if err != nil {
+		t.Fatalf("put %v in %v: %v", 0, tables[0], err)
+	}
+
+	err = larry.Copy(ctx, true, source, destination, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Ensure checkpoint worked
+	val, err := destination.Get(ctx, tables[4], newKey(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(val, newVal(10)) {
+		t.Fatal(fmt.Errorf("expected value not copied when using checkpoint"))
+	}
+	err = source.Put(ctx, tables[4], newKey(4), newVal(4))
+	if err != nil {
+		t.Fatalf("put %v in %v: %v", 0, tables[0], err)
+	}
+
+	// Get and has destination
+	err = dbhas(ctx, destination, tables, insertCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = dbgets(ctx, destination, tables, insertCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tb := range tables {
+		eq, _, err := larry.Compare(ctx, false, source, destination, tb)
+		if err != nil {
+			t.Fatalf("%v: %v", tb, err)
+		}
+		if !eq {
+			t.Fatalf("%v: databases mismatch", tb)
+		}
+	}
+}
+
 func dbOpenCloseOpen(ctx context.Context, db larry.Database, table string) error {
 	// Open again expect fail
 	err := db.Open(ctx)
@@ -1677,7 +1839,7 @@ func TestCopy(t *testing.T) {
 
 	larry.Verbose = true
 	larry.DefaultMaxRestoreChunk = 16384 // Many chunks
-	err = larry.Copy(ctx, source, destination, tables)
+	err = larry.Copy(ctx, false, source, destination, tables)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1748,6 +1910,73 @@ func TestInvalidComposite(t *testing.T) {
 		}
 	}()
 	_ = larry.KeyFromComposite("table", []byte(""))
+}
+
+func TestNextByteSlice(t *testing.T) {
+	type testTableItem struct {
+		name     string
+		val      []byte
+		expected []byte
+	}
+	testTable := []testTableItem{
+		{
+			name:     "default",
+			val:      []byte("test0"),
+			expected: []byte("test1"),
+		},
+		{
+			name:     "empty",
+			val:      []byte{},
+			expected: []byte{byte(0x00)},
+		},
+		{
+			name:     "nil",
+			val:      nil,
+			expected: []byte{byte(0x00)},
+		},
+		{
+			name:     "max",
+			val:      []byte{byte(0xff), byte(0xff)},
+			expected: []byte{byte(0xff), byte(0xff), byte(0)},
+		},
+	}
+	for _, tti := range testTable {
+		t.Run(tti.name, func(t *testing.T) {
+			rb := larry.NextByteSlice(tti.val)
+			if !bytes.Equal(rb, tti.expected) {
+				t.Fatalf("NextByteSlice: got %v, expected %v",
+					spew.Sdump(rb), spew.Sdump(tti.expected))
+			}
+			if bytes.Compare(rb, tti.val) != 1 {
+				t.Fatal("expected returned value > sent")
+			}
+			spew.Dump()
+		})
+	}
+}
+
+func dbHash(ctx context.Context, b larry.Database, table string) error {
+	if err := b.Put(ctx, table, []byte("abc"), []byte("def")); err != nil {
+		return err
+	}
+	if err := b.Put(ctx, table, []byte("hello"), []byte("world")); err != nil {
+		return err
+	}
+	if err := b.Put(ctx, table, []byte("123"), []byte("456")); err != nil {
+		return err
+	}
+	hash, err := larry.HashTable(ctx, b, table)
+	if err != nil {
+		return fmt.Errorf("HashTable: %w", err)
+	}
+	expected, err := hex.DecodeString("f76f84c181e88c2e9e40fa3a24948d82ca1d4cb9f62c3aed192fcb04418790dc")
+	if err != nil {
+		panic("could not decode hash")
+	}
+	if !bytes.Equal(hash[:], expected) {
+		return fmt.Errorf("got %x, expected %x", hash, expected)
+	}
+	return nil
 }
 
 // TODO tests
