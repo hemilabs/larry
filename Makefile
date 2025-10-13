@@ -2,9 +2,9 @@
 # Use of this source code is governed by the MIT License,
 # which can be found in the LICENSE file.
 
-.PHONY: all clean deps tidy lint lint-deps test
+.PHONY: all clean deps tidy build lint lint-deps test
 
-all: tidy lint test
+all: tidy build lint test
 
 clean:
 	rm -rf ./bin/
