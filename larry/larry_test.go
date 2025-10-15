@@ -805,6 +805,32 @@ func dbRangeFirstLast(ctx context.Context, db larry.Database, tables []string, t
 	return nil
 }
 
+func dbRangeEmpty(ctx context.Context, db larry.Database, tables []string, total int) error {
+	for _, table := range tables {
+		it, err := db.NewRange(ctx, table, nil, nil)
+		if err != nil {
+			return fmt.Errorf("new range: %w", err)
+		}
+		i := 0
+		for it.Next(ctx) {
+			if !bytes.Equal(it.Key(ctx), newKey(i)) {
+				return fmt.Errorf("invalid key got %v wanted %v",
+					it.Key(ctx), newKey(i))
+			}
+			if !bytes.Equal(it.Value(ctx), newVal(i)) {
+				return fmt.Errorf("invalid value got %x wanted %x",
+					it.Value(ctx), newVal(i))
+			}
+			i++
+		}
+		if i != total {
+			return fmt.Errorf("invalid record count got %v want %v", i, total)
+		}
+		it.Close(ctx)
+	}
+	return nil
+}
+
 // dbBatch inserts N records into a batch, commits it, iterates
 // through the table to ensure they exist, and deletes them.
 func dbBatch(ctx context.Context, db larry.Database, table string, recordCount int) error {
@@ -1047,6 +1073,9 @@ func TestLarry(t *testing.T) {
 
 				if err := dbRange(ctx, db, tables, insertCount); err != nil {
 					t.Errorf("dbRange: %v", err)
+				}
+				if err := dbRangeEmpty(ctx, db, tables, insertCount); err != nil {
+					t.Errorf("dbRangeEmpty: %v", err)
 				}
 				if err := dbRangeFirstLast(ctx, db, tables, insertCount); err != nil {
 					t.Fatal(err)
