@@ -69,6 +69,73 @@ func TestInvalidComposite(t *testing.T) {
 	_ = KeyFromComposite("table", []byte(""))
 }
 
+func TestBytesPrefix(t *testing.T) {
+	t.Parallel()
+	type testTableItem struct {
+		name          string
+		prefix        []byte
+		expectedStart []byte
+		expectedLimit []byte
+	}
+
+	tests := []testTableItem{
+		{
+			name:          "empty prefix",
+			prefix:        []byte{},
+			expectedStart: []byte{},
+			expectedLimit: nil,
+		},
+		{
+			name:          "min",
+			prefix:        []byte{0x00},
+			expectedStart: []byte{0x00},
+			expectedLimit: []byte{0x01},
+		},
+		{
+			name:          "max",
+			prefix:        []byte{0xff},
+			expectedStart: []byte{0xff},
+			expectedLimit: nil,
+		},
+		{
+			name:          "mixed",
+			prefix:        []byte{0x12, 0x34, 0x56},
+			expectedStart: []byte{0x12, 0x34, 0x56},
+			expectedLimit: []byte{0x12, 0x34, 0x57},
+		},
+		{
+			name:          "carry",
+			prefix:        []byte{0x12, 0xff, 0xff},
+			expectedStart: []byte{0x12, 0xff, 0xff},
+			expectedLimit: []byte{0x13},
+		},
+		{
+			name:          "carry max",
+			prefix:        []byte{0x00, 0xff, 0xff},
+			expectedStart: []byte{0x00, 0xff, 0xff},
+			expectedLimit: []byte{0x01},
+		},
+		{
+			name:          "all max",
+			prefix:        []byte{0xff, 0xff, 0xff},
+			expectedStart: []byte{0xff, 0xff, 0xff},
+			expectedLimit: nil,
+		},
+	}
+
+	for _, tti := range tests {
+		t.Run(tti.name, func(t *testing.T) {
+			start, limit := BytesPrefix(tti.prefix)
+			if !bytes.Equal(start, tti.expectedStart) {
+				t.Fatalf("start: got %v, want %v", start, tti.expectedStart)
+			}
+			if !bytes.Equal(limit, tti.expectedLimit) {
+				t.Fatalf("limit: got %v, want %v", limit, tti.expectedLimit)
+			}
+		})
+	}
+}
+
 func TestDummy(t *testing.T) {
 	t.Parallel()
 
