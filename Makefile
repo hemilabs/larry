@@ -20,7 +20,7 @@ build:
 	go build -trimpath -ldflags "-s -w $(GO_LDFLAGS)" ./larry
 
 define LICENSE_HEADER
-Copyright (c) 2025 Hemi Labs, Inc.
+Copyright (c) {{.year}} Hemi Labs, Inc.
 Use of this source code is governed by the MIT License,
 which can be found in the LICENSE file.
 endef
@@ -35,8 +35,8 @@ lint:
 	$(shell go env GOPATH)/bin/golicenser -tmpl="$$LICENSE_HEADER" -author="Hemi Labs, Inc." -year-mode=git-range --exclude "$(LICENSE_EXCLUDE)" --fix ./...
 
 lint-deps:
-	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.0
-	go install github.com/joshuasing/golicenser/cmd/golicenser@v0.1.0
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.5
+	go install github.com/joshuasing/golicenser/cmd/golicenser@v0.3
 
 test:
 	go test -test.timeout=20m ./...

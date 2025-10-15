@@ -30,7 +30,7 @@ var (
 	ErrInvalidRange   = errors.New("invalid or empty range")
 	ErrKeyNotFound    = errors.New("key not found")
 	ErrTableNotFound  = errors.New("table not found")
-	ErrNotSuported    = errors.New("not supported")
+	ErrNotSupported   = errors.New("not supported")
 )
 
 type Database interface {
