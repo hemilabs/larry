@@ -16,6 +16,7 @@ import (
 
 	"github.com/hemilabs/larry/larry"
 	"github.com/hemilabs/larry/larry/level"
+	"github.com/hemilabs/larry/larry/multi"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -941,6 +942,21 @@ func getDBs() []TestTableItem {
 			dbFunc: func(home string, tables []string) larry.Database {
 				cfg := level.DefaultLevelConfig(home, tables)
 				db, err := level.NewLevelDB(cfg)
+				if err != nil {
+					panic(err)
+				}
+				return db
+			},
+		},
+		{
+			name: "multidb",
+			dbFunc: func(home string, tables []string) larry.Database {
+				tm := make(map[string]string, len(tables))
+				for _, t := range tables {
+					tm[t] = "level"
+				}
+				cfg := multi.DefaultMultiConfig(home, tm)
+				db, err := multi.NewMultiDB(cfg)
 				if err != nil {
 					panic(err)
 				}
