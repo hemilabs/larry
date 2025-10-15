@@ -9,13 +9,14 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/hemilabs/larry/larry"
 	"github.com/juju/loggo"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/filter"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
 	"github.com/syndtr/goleveldb/leveldb/opt"
 	"github.com/syndtr/goleveldb/leveldb/util"
+
+	"github.com/hemilabs/larry/larry"
 )
 
 const logLevel = "INFO"
@@ -47,13 +48,13 @@ func xerr(err error) error {
 	return err
 }
 
-type LevelConfig struct {
+type Config struct {
 	Home   string
 	Tables []string
 }
 
-func DefaultLevelConfig(home string, tables []string) *LevelConfig {
-	return &LevelConfig{
+func DefaultLevelConfig(home string, tables []string) *Config {
+	return &Config{
 		Home:   home,
 		Tables: tables,
 	}
@@ -64,10 +65,10 @@ type levelDB struct {
 
 	tables map[string]struct{}
 
-	cfg *LevelConfig
+	cfg *Config
 }
 
-func NewLevelDB(cfg *LevelConfig) (larry.Database, error) {
+func NewLevelDB(cfg *Config) (larry.Database, error) {
 	if cfg == nil {
 		return nil, larry.ErrInvalidConfig
 	}
@@ -138,7 +139,7 @@ func (b *levelDB) Put(_ context.Context, table string, key, value []byte) error 
 	return xerr(b.db.Put(larry.NewCompositeKey(table, key), value, nil))
 }
 
-func (b *levelDB) Begin(_ context.Context, write bool) (larry.Transaction, error) {
+func (b *levelDB) Begin(_ context.Context, _ bool) (larry.Transaction, error) {
 	tx, err := b.db.OpenTransaction()
 	if err != nil {
 		return nil, xerr(err)
@@ -175,7 +176,7 @@ func (b *levelDB) Update(ctx context.Context, callback func(ctx context.Context,
 	return xerr(b.execute(ctx, true, callback))
 }
 
-func (b *levelDB) NewIterator(ctx context.Context, table string) (larry.Iterator, error) {
+func (b *levelDB) NewIterator(_ context.Context, table string) (larry.Iterator, error) {
 	if _, ok := b.tables[table]; !ok {
 		return nil, larry.ErrTableNotFound
 	}
@@ -186,7 +187,7 @@ func (b *levelDB) NewIterator(ctx context.Context, table string) (larry.Iterator
 	}, nil
 }
 
-func (b *levelDB) NewRange(ctx context.Context, table string, start, end []byte) (larry.Range, error) {
+func (b *levelDB) NewRange(_ context.Context, table string, start, end []byte) (larry.Range, error) {
 	if _, ok := b.tables[table]; !ok {
 		return nil, larry.ErrTableNotFound
 	}
@@ -205,7 +206,7 @@ func (b *levelDB) NewRange(ctx context.Context, table string, start, end []byte)
 	}, nil
 }
 
-func (b *levelDB) NewBatch(ctx context.Context) (larry.Batch, error) {
+func (b *levelDB) NewBatch(_ context.Context) (larry.Batch, error) {
 	return &levelBatch{db: b, wb: new(leveldb.Batch)}, nil
 }
 
@@ -216,14 +217,14 @@ type levelTX struct {
 	tx *leveldb.Transaction
 }
 
-func (tx *levelTX) Del(ctx context.Context, table string, key []byte) error {
+func (tx *levelTX) Del(_ context.Context, table string, key []byte) error {
 	if _, ok := tx.db.tables[table]; !ok {
 		return larry.ErrTableNotFound
 	}
 	return xerr(tx.tx.Delete(larry.NewCompositeKey(table, key), nil))
 }
 
-func (tx *levelTX) Has(ctx context.Context, table string, key []byte) (bool, error) {
+func (tx *levelTX) Has(_ context.Context, table string, key []byte) (bool, error) {
 	if _, ok := tx.db.tables[table]; !ok {
 		return false, larry.ErrTableNotFound
 	}
@@ -231,7 +232,7 @@ func (tx *levelTX) Has(ctx context.Context, table string, key []byte) (bool, err
 	return has, xerr(err)
 }
 
-func (tx *levelTX) Get(ctx context.Context, table string, key []byte) ([]byte, error) {
+func (tx *levelTX) Get(_ context.Context, table string, key []byte) ([]byte, error) {
 	if _, ok := tx.db.tables[table]; !ok {
 		return nil, larry.ErrTableNotFound
 	}
@@ -239,7 +240,7 @@ func (tx *levelTX) Get(ctx context.Context, table string, key []byte) ([]byte, e
 	return value, xerr(err)
 }
 
-func (tx *levelTX) Put(ctx context.Context, table string, key []byte, value []byte) error {
+func (tx *levelTX) Put(_ context.Context, table string, key []byte, value []byte) error {
 	if _, ok := tx.db.tables[table]; !ok {
 		return larry.ErrTableNotFound
 	}
@@ -249,16 +250,16 @@ func (tx *levelTX) Put(ctx context.Context, table string, key []byte, value []by
 	return xerr(tx.tx.Put(larry.NewCompositeKey(table, key), value, nil))
 }
 
-func (tx *levelTX) Commit(ctx context.Context) error {
+func (tx *levelTX) Commit(_ context.Context) error {
 	return xerr(tx.tx.Commit())
 }
 
-func (tx *levelTX) Rollback(ctx context.Context) error {
+func (tx *levelTX) Rollback(_ context.Context) error {
 	tx.tx.Discard()
 	return nil
 }
 
-func (tx *levelTX) Write(ctx context.Context, b larry.Batch) error {
+func (tx *levelTX) Write(_ context.Context, b larry.Batch) error {
 	return xerr(tx.tx.Write(b.(*levelBatch).wb, nil))
 }
 
@@ -292,7 +293,7 @@ func (ni *levelIterator) Value(_ context.Context) []byte {
 	return ni.it.Value()
 }
 
-func (ni *levelIterator) Close(ctx context.Context) {
+func (ni *levelIterator) Close(_ context.Context) {
 	ni.it.Release()
 }
 
@@ -316,15 +317,15 @@ func (nr *levelRange) Next(_ context.Context) bool {
 	return nr.it.Next()
 }
 
-func (nr *levelRange) Key(ctx context.Context) []byte {
+func (nr *levelRange) Key(_ context.Context) []byte {
 	return larry.KeyFromComposite(nr.table, nr.it.Key())
 }
 
-func (nr *levelRange) Value(ctx context.Context) []byte {
+func (nr *levelRange) Value(_ context.Context) []byte {
 	return nr.it.Value()
 }
 
-func (nr *levelRange) Close(ctx context.Context) {
+func (nr *levelRange) Close(_ context.Context) {
 	nr.it.Release()
 }
 
@@ -335,7 +336,7 @@ type levelBatch struct {
 	wb *leveldb.Batch
 }
 
-func (nb *levelBatch) Del(ctx context.Context, table string, key []byte) {
+func (nb *levelBatch) Del(_ context.Context, table string, key []byte) {
 	if _, ok := nb.db.tables[table]; !ok {
 		log.Errorf("%s: %v", table, larry.ErrTableNotFound)
 		return
@@ -343,7 +344,7 @@ func (nb *levelBatch) Del(ctx context.Context, table string, key []byte) {
 	nb.wb.Delete(larry.NewCompositeKey(table, key))
 }
 
-func (nb *levelBatch) Put(ctx context.Context, table string, key, value []byte) {
+func (nb *levelBatch) Put(_ context.Context, table string, key, value []byte) {
 	if _, ok := nb.db.tables[table]; !ok {
 		log.Errorf("%s: %v", table, larry.ErrTableNotFound)
 		return
@@ -354,6 +355,6 @@ func (nb *levelBatch) Put(ctx context.Context, table string, key, value []byte) 
 	nb.wb.Put(larry.NewCompositeKey(table, key), value)
 }
 
-func (nb *levelBatch) Reset(ctx context.Context) {
+func (nb *levelBatch) Reset(_ context.Context) {
 	nb.wb.Reset()
 }

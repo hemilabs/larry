@@ -10,22 +10,33 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"math/rand/v2"
+	"math"
+	rand "math/rand/v2"
 	"slices"
 	"testing"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/hemilabs/larry/larry"
 	"github.com/hemilabs/larry/larry/level"
-	"golang.org/x/sync/errgroup"
 )
 
 func newKey(i int) []byte {
+	if i < 0 {
+		panic("invalid key: value < 0")
+	}
+	if i > math.MaxUint32 {
+		panic("invalid key: value > maxuint32")
+	}
 	var key [4]byte
 	binary.BigEndian.PutUint32(key[:], uint32(i))
 	return key[:]
 }
 
 func newVal(i int) []byte {
+	if i < 0 {
+		panic("invalid key: value < 0")
+	}
 	var value [8]byte
 	binary.BigEndian.PutUint64(value[:], uint64(i))
 	return value[:]
@@ -463,13 +474,13 @@ func dbTransactionsCommit(ctx context.Context, db larry.Database, tables []strin
 
 // dbTransactionsMultipleWrite creates multiple write TXs concurrently
 // that update the same value. It asserts that each new write TX created
-// blocks until the previous one is commited.
+// blocks until the previous one is committed.
 func dbTransactionsMultipleWrite(ctx context.Context, db larry.Database, table string, txCount int) error {
 	last := txCount + 1
 	key := newKey(0)
 	err := db.Put(ctx, table, key, newVal(last))
 	if err != nil {
-		return fmt.Errorf("initial put")
+		return errors.New("initial put")
 	}
 	eg, ctx := errgroup.WithContext(ctx)
 	for i := range txCount {
@@ -697,7 +708,7 @@ func dbIterateSeek(ctx context.Context, db larry.Database, table string, recordC
 
 // 	err = db.Put(ctx, table, []byte{uint8(recordCount)}, []byte{uint8(recordCount)})
 // 	if err != nil {
-// 		return fmt.Errorf("put [%v,%v]: %w", recordCount, recordCount, err)
+// 		return fmt.Errorf("put [%v,%v]: %w", recordCount, err)
 // 	}
 
 // 	// Next
@@ -951,11 +962,12 @@ func getDBs() []TestTableItem {
 	return dbs
 }
 
-func reopen(name string, tables []string) larry.Database {
+// TODO: populate this when distributed dbs are added
+func reopen(_ string, _ []string) larry.Database {
 	return nil
 }
 
-func prepareTestSuite(t *testing.T, ctx context.Context, tableCount, insert int, tti TestTableItem) (larry.Database, []string) {
+func prepareTestSuite(ctx context.Context, t *testing.T, tableCount, insert int, tti TestTableItem) (larry.Database, []string) {
 	home := t.TempDir()
 
 	tables := make([]string, 0, tableCount)
@@ -982,15 +994,17 @@ func prepareTestSuite(t *testing.T, ctx context.Context, tableCount, insert int,
 }
 
 func TestLarry(t *testing.T) {
+	t.Parallel()
 	testTable := getDBs()
 	for _, tti := range testTable {
 		t.Run(tti.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			const insertCount = 10
 			t.Run("basic", func(t *testing.T) {
-				db, tables := prepareTestSuite(t, ctx, 5, 0, tti)
+				db, tables := prepareTestSuite(ctx, t, 5, 0, tti)
 				defer func() {
 					err := db.Close(ctx)
 					if err != nil {
@@ -1004,7 +1018,7 @@ func TestLarry(t *testing.T) {
 			})
 
 			t.Run("transactions", func(t *testing.T) {
-				db, tables := prepareTestSuite(t, ctx, 5, 0, tti)
+				db, tables := prepareTestSuite(ctx, t, 5, 0, tti)
 				defer func() {
 					err := db.Close(ctx)
 					if err != nil {
@@ -1035,7 +1049,7 @@ func TestLarry(t *testing.T) {
 			})
 
 			t.Run("iterator", func(t *testing.T) {
-				db, tables := prepareTestSuite(t, ctx, 3, insertCount, tti)
+				db, tables := prepareTestSuite(ctx, t, 3, insertCount, tti)
 				defer func() {
 					err := db.Close(ctx)
 					if err != nil {
@@ -1063,7 +1077,7 @@ func TestLarry(t *testing.T) {
 			})
 
 			t.Run("range", func(t *testing.T) {
-				db, tables := prepareTestSuite(t, ctx, 3, insertCount, tti)
+				db, tables := prepareTestSuite(ctx, t, 3, insertCount, tti)
 				defer func() {
 					err := db.Close(ctx)
 					if err != nil {
@@ -1083,7 +1097,7 @@ func TestLarry(t *testing.T) {
 			})
 
 			t.Run("batch", func(t *testing.T) {
-				db, tables := prepareTestSuite(t, ctx, 1, 0, tti)
+				db, tables := prepareTestSuite(ctx, t, 1, 0, tti)
 				defer func() {
 					err := db.Close(ctx)
 					if err != nil {
@@ -1100,7 +1114,7 @@ func TestLarry(t *testing.T) {
 			})
 
 			t.Run("reopen", func(t *testing.T) {
-				db, tables := prepareTestSuite(t, ctx, 1, 0, tti)
+				db, tables := prepareTestSuite(ctx, t, 1, 0, tti)
 				defer func() {
 					err := db.Close(ctx)
 					if err != nil {
@@ -1133,7 +1147,7 @@ func BenchmarkLarryBatch(b *testing.B) {
 	testTable := getDBs()
 	ctx, cancel := context.WithCancel(b.Context())
 	defer cancel()
-	for _, tti := range testTable[:len(testTable)-2] {
+	for _, tti := range testTable {
 		for _, insertCount := range []int{1, 10, 100, 1000, 10000} {
 			benchName := fmt.Sprintf("%v/%v", tti.name, insertCount)
 			b.Run(benchName, func(b *testing.B) {
@@ -1155,9 +1169,7 @@ func BenchmarkLarryBatch(b *testing.B) {
 
 				keyList := make([][]byte, 0, insertCount)
 				for i := range insertCount {
-					var key [4]byte
-					binary.BigEndian.PutUint32(key[:], uint32(i))
-					keyList = append(keyList, key[:])
+					keyList = append(keyList, newKey(i))
 				}
 
 				wb, err := db.NewBatch(ctx)
@@ -1185,7 +1197,7 @@ func BenchmarkLarryIter(b *testing.B) {
 	testTable := getDBs()
 	ctx, cancel := context.WithCancel(b.Context())
 	defer cancel()
-	for _, tti := range testTable[:len(testTable)-2] {
+	for _, tti := range testTable {
 		insertCount := 10
 		benchName := fmt.Sprintf("%v/%d-iterations", tti.name, insertCount)
 		b.Run(benchName, func(b *testing.B) {
@@ -1208,9 +1220,8 @@ func BenchmarkLarryIter(b *testing.B) {
 
 			errc := db.Update(ctx, func(ctx context.Context, tx larry.Transaction) error {
 				for i := range insertCount {
-					var key [4]byte
-					binary.BigEndian.PutUint32(key[:], uint32(i))
-					if err := tx.Put(ctx, table, key[:], key[:]); err != nil {
+					key := newKey(i)
+					if err := tx.Put(ctx, table, key, key); err != nil {
 						return err
 					}
 				}
@@ -1233,7 +1244,6 @@ func BenchmarkLarryIter(b *testing.B) {
 
 			it.Close(ctx)
 		})
-
 	}
 }
 
@@ -1241,7 +1251,7 @@ func BenchmarkLarryGet(b *testing.B) {
 	testTable := getDBs()
 	ctx, cancel := context.WithCancel(b.Context())
 	defer cancel()
-	for _, tti := range testTable[:len(testTable)-2] {
+	for _, tti := range testTable {
 		for _, insertCount := range []int{1, 10, 100, 1000, 10000, 100000} {
 			benchName := fmt.Sprintf("%v/%v", tti.name, insertCount)
 			b.Run(benchName, func(b *testing.B) {
@@ -1264,9 +1274,8 @@ func BenchmarkLarryGet(b *testing.B) {
 
 				errc := db.Update(ctx, func(ctx context.Context, tx larry.Transaction) error {
 					for i := range insertCount {
-						var key [4]byte
-						binary.BigEndian.PutUint32(key[:], uint32(i))
-						if err := tx.Put(ctx, table, key[:], key[:]); err != nil {
+						key := newKey(i)
+						if err := tx.Put(ctx, table, key, key); err != nil {
 							return err
 						}
 					}
@@ -1278,6 +1287,7 @@ func BenchmarkLarryGet(b *testing.B) {
 
 				for b.Loop() {
 					var key [4]byte
+					//nolint:gosec // strong randomizer not needed
 					r := rand.Uint32N(uint32(insertCount))
 					binary.BigEndian.PutUint32(key[:], r)
 					_, err := db.Get(ctx, table, key[:])
@@ -1321,6 +1331,7 @@ func dbOpenCloseOpen(ctx context.Context, db larry.Database, table string) error
 }
 
 func TestCompositeKey(t *testing.T) {
+	t.Parallel()
 	type testTableItem struct {
 		name       string
 		key, table string
@@ -1369,6 +1380,7 @@ func TestCompositeKey(t *testing.T) {
 }
 
 func TestInvalidComposite(t *testing.T) {
+	t.Parallel()
 	defer func() {
 		if r := recover(); r == nil {
 			t.Errorf("expected panic")
