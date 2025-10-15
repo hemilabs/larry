@@ -26,10 +26,13 @@ which can be found in the LICENSE file.
 endef
 export LICENSE_HEADER
 
+# Borrowed code
+LICENSE_EXCLUDE := **/larry/**vendor**
+
 lint:
 	$(shell go env GOPATH)/bin/golangci-lint fmt ./...
 	$(shell go env GOPATH)/bin/golangci-lint run --fix ./...
-	$(shell go env GOPATH)/bin/golicenser -tmpl="$$LICENSE_HEADER" -author="Hemi Labs, Inc." -year-mode=git-range -fix ./...
+	$(shell go env GOPATH)/bin/golicenser -tmpl="$$LICENSE_HEADER" -author="Hemi Labs, Inc." -year-mode=git-range --exclude "$(LICENSE_EXCLUDE)" --fix ./...
 
 lint-deps:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.0
