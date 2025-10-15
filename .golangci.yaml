@@ -1,0 +1,87 @@
+version: "2"
+run:
+  tests: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  enable:
+    - "asasalint"
+    - "asciicheck"
+    - "bodyclose"
+    - "canonicalheader"
+    - "dupl"
+    - "dupword"
+    - "errcheck"
+    - "errchkjson"
+    - "errname"
+    - "errorlint"
+    - "errname"
+    - "gocheckcompilerdirectives"
+    - "gochecksumtype"
+    - "goconst"
+    - "godoclint"
+    - "gomoddirectives"
+    - "gosec"
+    - "gosmopolitan"
+    - "govet"
+    - "ineffassign"
+    - "intrange"
+    - "makezero"
+    - "misspell"
+    - "nilerr"
+    - "noctx"
+    - "nolintlint"
+    - "paralleltest"
+    - "perfsprint"
+    - "prealloc"
+    - "predeclared"
+    - "promlinter"
+    - "revive"
+    - "rowserrcheck"
+    - "sloglint"
+    - "sqlclosecheck"
+    - "staticcheck"
+    - "unconvert"
+    - "unused"
+    - "usestdlibvars"
+    - "usetesting"
+    - "whitespace"
+  settings:
+    nolintlint:
+      # Require an explanation after each nolint directive.
+      # Explanation format example: '//nolint:ineffassign // Explanation goes here.'
+      # If this becomes too annoying, disable it.
+      require-explanation: true
+  exclusions:
+    generated: "strict"
+    presets:
+      - "comments"
+      - "common-false-positives"
+      - "legacy"
+      - "std-error-handling"
+    paths:
+      - "third_party$"
+      - "builtin$"
+      - "examples$"
+
+formatters:
+  enable:
+    - "gci"
+    - "gofumpt"
+  settings:
+    gci:
+      sections:
+        - "standard"
+        - "default"
+        - "blank"
+        - "dot"
+        - "localmodule"
+      custom-order: true
+  exclusions:
+    paths:
+      - "third_party$"
+      - "builtin$"
+      - "examples$"

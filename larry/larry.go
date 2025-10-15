@@ -84,7 +84,7 @@ func KeyFromComposite(table string, key []byte) []byte {
 
 // Transactions
 
-// Transactions are read-only or read-write. A read-only transaction is a
+// Transaction is read-only or read-write. A read-only transaction is a
 // snapshot of the database/table tuple and will not change for the duration of
 // the transaction. A read-write transaction has the same guarantees as the
 // read-only transaction however now one can also modify data.
@@ -125,6 +125,7 @@ type Transaction interface {
 
 // Batches
 
+// Batch stores operations to be executed, as a block, by a transaction.
 // The following idiom is considered best practice:
 // ```
 //
