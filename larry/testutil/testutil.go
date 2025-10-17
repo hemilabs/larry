@@ -62,23 +62,18 @@ func RunLarryTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
 
 		if err := dbTransactionsRollback(ctx, db, tables, insertCount); err != nil {
 			t.Errorf("dbTransactionsRollback: %v", err)
-			t.Fail()
 		}
 		if err := dbTransactionsCommit(ctx, db, tables, insertCount); err != nil {
 			t.Errorf("dbTransactionsCommit: %v", err)
-			t.Fail()
 		}
 		if err := dbTransactionsDelete(ctx, db, tables, insertCount); err != nil {
 			t.Errorf("dbTransactionsDelete: %v", err)
-			t.Fail()
 		}
 		if err := dbTransactionsErrors(ctx, db, tables); err != nil {
 			t.Errorf("dbTransactionsErrors: %v", err)
-			t.Fail()
 		}
 		if err := dbTransactionsMultipleWrite(ctx, db, tables[0], 5); err != nil {
 			t.Errorf("dbTransactionsMultipleWrite: %v", err)
-			t.Fail()
 		}
 	})
 
