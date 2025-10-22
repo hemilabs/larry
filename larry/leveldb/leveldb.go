@@ -2,9 +2,8 @@
 // Use of this source code is governed by the MIT License,
 // which can be found in the LICENSE file.
 
+// Package leveldb implements a Larry database backend using leveldb.
 package leveldb
-
-// This package adds a Larry database implementation using leveldb.
 
 import (
 	"context"
