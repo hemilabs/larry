@@ -55,6 +55,11 @@ linters:
       # Explanation format example: '//nolint:ineffassign // Explanation goes here.'
       # If this becomes too annoying, disable it.
       require-explanation: true
+    paralleltest:
+      # Ignore missing calls to `t.Parallel()` in subtests. Top-level tests are
+      # still required to have `t.Parallel`, but subtests are allowed to skip it.
+      # Default: false
+      ignore-missing-subtests: true
   exclusions:
     generated: "strict"
     presets:

@@ -32,7 +32,7 @@ The focus of Larry is not to create and maintain a series of database implementa
 
 | Database   | Driver                                      | Status      | 
 |------------|---------------------------------------------|-------------|
-| TBD        | `------`                                    | ------      |
+| levelDB    | [`github.com/syndtr/goleveldb`](https://github.com/syndtr/goleveldb) | Supported   |
 
 
 ### General Purpose
