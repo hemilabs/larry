@@ -2,19 +2,19 @@
 // Use of this source code is governed by the MIT License,
 // which can be found in the LICENSE file.
 
-package level
+package leveldb
 
 import (
 	"testing"
 
+	"github.com/hemilabs/larry/internal/testutil"
 	"github.com/hemilabs/larry/larry"
-	"github.com/hemilabs/larry/larry/testutil"
 )
 
 func TestLevelDB(t *testing.T) {
 	t.Parallel()
 	dbFunc := func(home string, tables []string) larry.Database {
-		cfg := DefaultLevelConfig(home, tables)
+		cfg := DefaultLevelDBConfig(home, tables)
 		db, err := NewLevelDB(cfg)
 		if err != nil {
 			panic(err)
@@ -26,7 +26,7 @@ func TestLevelDB(t *testing.T) {
 
 func BenchmarkLevelDB(b *testing.B) {
 	dbFunc := func(home string, tables []string) larry.Database {
-		cfg := DefaultLevelConfig(home, tables)
+		cfg := DefaultLevelDBConfig(home, tables)
 		db, err := NewLevelDB(cfg)
 		if err != nil {
 			panic(err)

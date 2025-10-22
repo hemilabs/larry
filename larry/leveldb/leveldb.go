@@ -2,7 +2,9 @@
 // Use of this source code is governed by the MIT License,
 // which can be found in the LICENSE file.
 
-package level
+package leveldb
+
+// This package adds a Larry database implementation using leveldb.
 
 import (
 	"context"
@@ -31,11 +33,11 @@ func init() {
 
 // Assert required interfaces
 var (
-	_ larry.Batch       = (*levelBatch)(nil)
+	_ larry.Batch       = (*leveldbBatch)(nil)
 	_ larry.Database    = (*levelDB)(nil)
-	_ larry.Iterator    = (*levelIterator)(nil)
-	_ larry.Range       = (*levelRange)(nil)
-	_ larry.Transaction = (*levelTX)(nil)
+	_ larry.Iterator    = (*leveldbIterator)(nil)
+	_ larry.Range       = (*leveldbRange)(nil)
+	_ larry.Transaction = (*leveldbTX)(nil)
 )
 
 func xerr(err error) error {
@@ -53,7 +55,7 @@ type Config struct {
 	Tables []string
 }
 
-func DefaultLevelConfig(home string, tables []string) *Config {
+func DefaultLevelDBConfig(home string, tables []string) *Config {
 	return &Config{
 		Home:   home,
 		Tables: tables,
@@ -144,7 +146,7 @@ func (b *levelDB) Begin(_ context.Context, _ bool) (larry.Transaction, error) {
 	if err != nil {
 		return nil, xerr(err)
 	}
-	return &levelTX{
+	return &leveldbTX{
 		db: b,
 		tx: tx,
 	}, nil
@@ -181,7 +183,7 @@ func (b *levelDB) NewIterator(_ context.Context, table string) (larry.Iterator, 
 		return nil, larry.ErrTableNotFound
 	}
 	r := util.BytesPrefix(larry.NewCompositeKey(table, nil))
-	return &levelIterator{
+	return &leveldbIterator{
 		table: table,
 		it:    b.db.NewIterator(r, nil),
 	}, nil
@@ -195,7 +197,7 @@ func (b *levelDB) NewRange(_ context.Context, table string, start, end []byte) (
 	if end != nil {
 		r.Limit = larry.NewCompositeKey(table, end)
 	}
-	return &levelRange{
+	return &leveldbRange{
 		table: table,
 		it: b.db.NewIterator(&util.Range{
 			Start: larry.NewCompositeKey(table, start),
@@ -207,24 +209,24 @@ func (b *levelDB) NewRange(_ context.Context, table string, start, end []byte) (
 }
 
 func (b *levelDB) NewBatch(_ context.Context) (larry.Batch, error) {
-	return &levelBatch{db: b, wb: new(leveldb.Batch)}, nil
+	return &leveldbBatch{db: b, wb: new(leveldb.Batch)}, nil
 }
 
 // Transactions
 
-type levelTX struct {
+type leveldbTX struct {
 	db *levelDB
 	tx *leveldb.Transaction
 }
 
-func (tx *levelTX) Del(_ context.Context, table string, key []byte) error {
+func (tx *leveldbTX) Del(_ context.Context, table string, key []byte) error {
 	if _, ok := tx.db.tables[table]; !ok {
 		return larry.ErrTableNotFound
 	}
 	return xerr(tx.tx.Delete(larry.NewCompositeKey(table, key), nil))
 }
 
-func (tx *levelTX) Has(_ context.Context, table string, key []byte) (bool, error) {
+func (tx *leveldbTX) Has(_ context.Context, table string, key []byte) (bool, error) {
 	if _, ok := tx.db.tables[table]; !ok {
 		return false, larry.ErrTableNotFound
 	}
@@ -232,7 +234,7 @@ func (tx *levelTX) Has(_ context.Context, table string, key []byte) (bool, error
 	return has, xerr(err)
 }
 
-func (tx *levelTX) Get(_ context.Context, table string, key []byte) ([]byte, error) {
+func (tx *leveldbTX) Get(_ context.Context, table string, key []byte) ([]byte, error) {
 	if _, ok := tx.db.tables[table]; !ok {
 		return nil, larry.ErrTableNotFound
 	}
@@ -240,7 +242,7 @@ func (tx *levelTX) Get(_ context.Context, table string, key []byte) ([]byte, err
 	return value, xerr(err)
 }
 
-func (tx *levelTX) Put(_ context.Context, table string, key []byte, value []byte) error {
+func (tx *leveldbTX) Put(_ context.Context, table string, key []byte, value []byte) error {
 	if _, ok := tx.db.tables[table]; !ok {
 		return larry.ErrTableNotFound
 	}
@@ -250,93 +252,93 @@ func (tx *levelTX) Put(_ context.Context, table string, key []byte, value []byte
 	return xerr(tx.tx.Put(larry.NewCompositeKey(table, key), value, nil))
 }
 
-func (tx *levelTX) Commit(_ context.Context) error {
+func (tx *leveldbTX) Commit(_ context.Context) error {
 	return xerr(tx.tx.Commit())
 }
 
-func (tx *levelTX) Rollback(_ context.Context) error {
+func (tx *leveldbTX) Rollback(_ context.Context) error {
 	tx.tx.Discard()
 	return nil
 }
 
-func (tx *levelTX) Write(_ context.Context, b larry.Batch) error {
-	return xerr(tx.tx.Write(b.(*levelBatch).wb, nil))
+func (tx *leveldbTX) Write(_ context.Context, b larry.Batch) error {
+	return xerr(tx.tx.Write(b.(*leveldbBatch).wb, nil))
 }
 
 // Iterations
-type levelIterator struct {
+type leveldbIterator struct {
 	table string
 	it    iterator.Iterator
 }
 
-func (ni *levelIterator) First(_ context.Context) bool {
+func (ni *leveldbIterator) First(_ context.Context) bool {
 	return ni.it.First()
 }
 
-func (ni *levelIterator) Last(_ context.Context) bool {
+func (ni *leveldbIterator) Last(_ context.Context) bool {
 	return ni.it.Last()
 }
 
-func (ni *levelIterator) Next(_ context.Context) bool {
+func (ni *leveldbIterator) Next(_ context.Context) bool {
 	return ni.it.Next()
 }
 
-func (ni *levelIterator) Seek(_ context.Context, key []byte) bool {
+func (ni *leveldbIterator) Seek(_ context.Context, key []byte) bool {
 	return ni.it.Seek(larry.NewCompositeKey(ni.table, key))
 }
 
-func (ni *levelIterator) Key(_ context.Context) []byte {
+func (ni *leveldbIterator) Key(_ context.Context) []byte {
 	return larry.KeyFromComposite(ni.table, ni.it.Key())
 }
 
-func (ni *levelIterator) Value(_ context.Context) []byte {
+func (ni *leveldbIterator) Value(_ context.Context) []byte {
 	return ni.it.Value()
 }
 
-func (ni *levelIterator) Close(_ context.Context) {
+func (ni *leveldbIterator) Close(_ context.Context) {
 	ni.it.Release()
 }
 
 // Ranges
-type levelRange struct {
+type leveldbRange struct {
 	table string
 	it    iterator.Iterator
 	start []byte
 	end   []byte
 }
 
-func (nr *levelRange) First(_ context.Context) bool {
+func (nr *leveldbRange) First(_ context.Context) bool {
 	return nr.it.First()
 }
 
-func (nr *levelRange) Last(_ context.Context) bool {
+func (nr *leveldbRange) Last(_ context.Context) bool {
 	return nr.it.Last()
 }
 
-func (nr *levelRange) Next(_ context.Context) bool {
+func (nr *leveldbRange) Next(_ context.Context) bool {
 	return nr.it.Next()
 }
 
-func (nr *levelRange) Key(_ context.Context) []byte {
+func (nr *leveldbRange) Key(_ context.Context) []byte {
 	return larry.KeyFromComposite(nr.table, nr.it.Key())
 }
 
-func (nr *levelRange) Value(_ context.Context) []byte {
+func (nr *leveldbRange) Value(_ context.Context) []byte {
 	return nr.it.Value()
 }
 
-func (nr *levelRange) Close(_ context.Context) {
+func (nr *leveldbRange) Close(_ context.Context) {
 	nr.it.Release()
 }
 
 // Batches
 
-type levelBatch struct {
+type leveldbBatch struct {
 	db *levelDB
 	wb *leveldb.Batch
 }
 
-func (nb *levelBatch) Del(_ context.Context, table string, key []byte) {
+func (nb *leveldbBatch) Del(_ context.Context, table string, key []byte) {
 	if _, ok := nb.db.tables[table]; !ok {
 		log.Errorf("%s: %v", table, larry.ErrTableNotFound)
 		return
@@ -344,7 +346,7 @@ func (nb *levelBatch) Del(_ context.Context, table string, key []byte) {
 	nb.wb.Delete(larry.NewCompositeKey(table, key))
 }
 
-func (nb *levelBatch) Put(_ context.Context, table string, key, value []byte) {
+func (nb *leveldbBatch) Put(_ context.Context, table string, key, value []byte) {
 	if _, ok := nb.db.tables[table]; !ok {
 		log.Errorf("%s: %v", table, larry.ErrTableNotFound)
 		return
@@ -355,6 +357,6 @@ func (nb *levelBatch) Put(_ context.Context, table string, key, value []byte) {
 	nb.wb.Put(larry.NewCompositeKey(table, key), value)
 }
 
-func (nb *levelBatch) Reset(_ context.Context) {
+func (nb *leveldbBatch) Reset(_ context.Context) {
 	nb.wb.Reset()
 }
