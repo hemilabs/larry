@@ -429,5 +429,8 @@ func (mb *multiBatch) Put(ctx context.Context, table string, key, value []byte) 
 }
 
 func (mb *multiBatch) Reset(_ context.Context) {
+	mb.db.mtx.RLock()
+	defer mb.db.mtx.RUnlock()
+
 	mb.bts = make(map[string]larry.Batch, len(mb.db.pool))
 }
