@@ -201,7 +201,7 @@ func RunLarryTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
 		}
 	})
 
-	t.Run("clone", func(t *testing.T) {
+	t.Run("copy", func(t *testing.T) {
 		if !distributed {
 			t.Parallel()
 		}
@@ -221,7 +221,7 @@ func RunLarryTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
 			}
 		}()
 
-		if err := dbClone(ctx, source, destination, tables); err != nil {
+		if err := dbCopy(ctx, source, destination, tables); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -1291,7 +1291,7 @@ func dbDumpRestorePipeline(ctx context.Context, db larry.Database, tables []stri
 	return nil
 }
 
-func dbClone(ctx context.Context, source, destination larry.Database, tables []string) error {
+func dbCopy(ctx context.Context, source, destination larry.Database, tables []string) error {
 	// Puts
 	insertCount := 18999
 	err := dbputs(ctx, source, tables, insertCount)
