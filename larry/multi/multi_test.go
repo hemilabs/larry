@@ -28,7 +28,7 @@ func TestMultiDB(t *testing.T) {
 	testutil.RunLarryTests(t, dbFunc, false)
 }
 
-func BenchmarkLevelDB(b *testing.B) {
+func BenchmarkMultiDB(b *testing.B) {
 	dbFunc := func(home string, tables []string) larry.Database {
 		tm := make(map[string]string, len(tables))
 		for _, t := range tables {
