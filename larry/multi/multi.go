@@ -43,6 +43,7 @@ var (
 	_ larry.Batch       = (*multiBatch)(nil)
 	_ larry.Database    = (*multiDB)(nil)
 	_ larry.Transaction = (*multiTX)(nil)
+	// Utilizes internal DBs' iterators / ranges.
 )
 
 type Config struct {
@@ -185,39 +186,54 @@ func (b *multiDB) Close(ctx context.Context) error {
 	return errSeen
 }
 
-func (b *multiDB) Del(ctx context.Context, table string, key []byte) error {
+func (b *multiDB) getTable(_ context.Context, table string) (larry.Database, error) {
+	b.mtx.RLock()
+	defer b.mtx.RUnlock()
+
 	db, ok := b.pool[table]
 	if !ok {
-		return larry.ErrTableNotFound
+		return nil, larry.ErrTableNotFound
+	}
+
+	return db, nil
+}
+
+func (b *multiDB) Del(ctx context.Context, table string, key []byte) error {
+	db, err := b.getTable(ctx, table)
+	if err != nil {
+		return err
 	}
 	return db.Del(ctx, dbname, key)
 }
 
 func (b *multiDB) Has(ctx context.Context, table string, key []byte) (bool, error) {
-	db, ok := b.pool[table]
-	if !ok {
-		return false, larry.ErrTableNotFound
+	db, err := b.getTable(ctx, table)
+	if err != nil {
+		return false, err
 	}
 	return db.Has(ctx, dbname, key)
 }
 
 func (b *multiDB) Get(ctx context.Context, table string, key []byte) ([]byte, error) {
-	db, ok := b.pool[table]
-	if !ok {
-		return nil, larry.ErrTableNotFound
+	db, err := b.getTable(ctx, table)
+	if err != nil {
+		return nil, err
 	}
 	return db.Get(ctx, dbname, key)
 }
 
 func (b *multiDB) Put(ctx context.Context, table string, key, value []byte) error {
-	db, ok := b.pool[table]
-	if !ok {
-		return larry.ErrTableNotFound
+	db, err := b.getTable(ctx, table)
+	if err != nil {
+		return err
 	}
 	return db.Put(ctx, dbname, key, value)
 }
 
 func (b *multiDB) Begin(_ context.Context, write bool) (larry.Transaction, error) {
+	b.mtx.RLock()
+	defer b.mtx.RUnlock()
+
 	return &multiTX{
 		db:    b,
 		txs:   make(map[string]larry.Transaction, len(b.pool)),
@@ -253,22 +269,26 @@ func (b *multiDB) Update(ctx context.Context, callback func(ctx context.Context,
 }
 
 func (b *multiDB) NewIterator(ctx context.Context, table string) (larry.Iterator, error) {
-	idb, ok := b.pool[table]
-	if !ok {
-		return nil, larry.ErrTableNotFound
+	idb, err := b.getTable(ctx, table)
+	if err != nil {
+		return nil, err
 	}
 	return idb.NewIterator(ctx, dbname)
 }
 
 func (b *multiDB) NewRange(ctx context.Context, table string, start, end []byte) (larry.Range, error) {
-	idb, ok := b.pool[table]
-	if !ok {
-		return nil, larry.ErrTableNotFound
+	idb, err := b.getTable(ctx, table)
+	if err != nil {
+		return nil, err
 	}
+
 	return idb.NewRange(ctx, dbname, start, end)
 }
 
 func (b *multiDB) NewBatch(_ context.Context) (larry.Batch, error) {
+	b.mtx.RLock()
+	defer b.mtx.RUnlock()
+
 	return &multiBatch{
 		db:  b,
 		bts: make(map[string]larry.Batch, len(b.pool)),
@@ -286,9 +306,9 @@ type multiTX struct {
 }
 
 func (tx *multiTX) addInternalTx(ctx context.Context, table string) error {
-	idb, ok := tx.db.pool[table]
-	if !ok {
-		return larry.ErrTableNotFound
+	idb, err := tx.db.getTable(ctx, table)
+	if err != nil {
+		return err
 	}
 
 	if _, ok := tx.txs[table]; !ok {
@@ -376,9 +396,9 @@ type multiBatch struct {
 }
 
 func (mb *multiBatch) addInternalBatch(ctx context.Context, table string) error {
-	idb, ok := mb.db.pool[table]
-	if !ok {
-		return larry.ErrTableNotFound
+	idb, err := mb.db.getTable(ctx, table)
+	if err != nil {
+		return err
 	}
 
 	if _, ok := mb.bts[table]; !ok {
