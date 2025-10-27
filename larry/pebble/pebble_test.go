@@ -11,7 +11,7 @@ import (
 	"github.com/hemilabs/larry/larry"
 )
 
-func TestLevelDB(t *testing.T) {
+func TestPebble(t *testing.T) {
 	t.Parallel()
 	dbFunc := func(home string, tables []string) larry.Database {
 		cfg := DefaultPebbleConfig(home, tables)
@@ -24,7 +24,7 @@ func TestLevelDB(t *testing.T) {
 	testutil.RunLarryTests(t, dbFunc, false)
 }
 
-func BenchmarkLevelDB(b *testing.B) {
+func BenchmarkPebble(b *testing.B) {
 	dbFunc := func(home string, tables []string) larry.Database {
 		cfg := DefaultPebbleConfig(home, tables)
 		db, err := NewPebbleDB(cfg)

@@ -61,12 +61,13 @@ func DefaultPebbleConfig(home string, tables []string) *Config {
 type pebbleDB struct {
 	db *pebble.DB
 
+	// This map does not require a lock since it is
+	// read-only after being initialized.
 	tables map[string]struct{}
 
 	cfg *Config
 
-	// kinda sucks but we must force
-	// multiple write txs to block
+	// Required in order to ensure multiple write transactions block.
 	txMtx sync.Mutex
 }
 
@@ -155,13 +156,13 @@ func (b *pebbleDB) Put(_ context.Context, table string, key, value []byte) error
 
 func (b *pebbleDB) Begin(_ context.Context, write bool) (larry.Transaction, error) {
 	if write {
+		// Unblocked on tx commit or rollback.
 		b.txMtx.Lock()
 	}
 
-	// XXX pebbleDB doesn't have transactions, so we must use batches to
-	// emulate the behavior. However, having reads in a pebble batch is MORE
-	// expensive than write only, so we should reconsider using
-	// NewIndexedBatch (read/write) and use NewBatch (write only).
+	// NewIndexedBatch is required in order to be able to read using a batch.
+	// This is more expensive than NewBatch(), but we cannot read from a write
+	// transaction otherwise.
 	tx := b.db.NewIndexedBatch()
 	return &pebbleTX{
 		db:    b,
@@ -253,7 +254,7 @@ func (b *pebbleDB) NewBatch(_ context.Context) (larry.Batch, error) {
 // Transactions
 
 // PebbleDB doesn't have transactions, so emulate behavior
-// Using batches.
+// using batches.
 type pebbleTX struct {
 	db    *pebbleDB
 	tx    *pebble.Batch
