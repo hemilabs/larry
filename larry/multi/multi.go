@@ -2,6 +2,9 @@
 // Use of this source code is governed by the MIT License,
 // which can be found in the LICENSE file.
 
+// Multi is a database multiplexer.
+// It allows one to use a different larry database per table,
+// but manage and perform operations under a common interface.
 package multi
 
 import (
