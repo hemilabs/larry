@@ -16,15 +16,18 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/hemilabs/larry/larry"
-	"github.com/hemilabs/larry/larry/level"
 	"github.com/juju/loggo"
 	"github.com/mitchellh/go-homedir"
+
+	"github.com/hemilabs/larry/larry"
+	"github.com/hemilabs/larry/larry/leveldb"
 )
 
 const (
 	logLevel = "INFO"
 	dbname   = ""
+
+	TypeLevelDB = "leveldb"
 )
 
 var log = loggo.GetLogger("multi")
@@ -42,7 +45,7 @@ var (
 	_ larry.Transaction = (*multiTX)(nil)
 )
 
-type MultiConfig struct {
+type Config struct {
 	Home string
 
 	// Format - key: name, value: db type
@@ -52,8 +55,8 @@ type MultiConfig struct {
 	Tables map[string]string
 }
 
-func DefaultMultiConfig(home string, tables map[string]string) *MultiConfig {
-	return &MultiConfig{
+func DefaultMultiConfig(home string, tables map[string]string) *Config {
+	return &Config{
 		Home:   home,
 		Tables: tables,
 	}
@@ -66,22 +69,22 @@ type multiDB struct {
 
 	pool pool // database pool
 
-	cfg *MultiConfig
+	cfg *Config
 
 	open bool
 }
 
-func (l *multiDB) openDB(ctx context.Context, db, name string) error {
+func (b *multiDB) openDB(ctx context.Context, db, name string) error {
 	var (
 		bhsDB larry.Database
 		err   error
 	)
 
-	bhs := filepath.Join(l.cfg.Home, name)
+	bhs := filepath.Join(b.cfg.Home, name)
 	switch db {
-	case "level":
-		cfg := level.DefaultLevelConfig(bhs, []string{dbname})
-		bhsDB, err = level.NewLevelDB(cfg)
+	case TypeLevelDB:
+		cfg := leveldb.DefaultLevelDBConfig(bhs, []string{dbname})
+		bhsDB, err = leveldb.NewLevelDB(cfg)
 	default:
 		err = fmt.Errorf("unsupported db type: %v", db)
 	}
@@ -92,12 +95,12 @@ func (l *multiDB) openDB(ctx context.Context, db, name string) error {
 	if err := bhsDB.Open(ctx); err != nil {
 		return fmt.Errorf("db pool open %v: %w", db, err)
 	}
-	l.pool[filepath.Base(name)] = bhsDB
+	b.pool[filepath.Base(name)] = bhsDB
 
 	return nil
 }
 
-func NewMultiDB(cfg *MultiConfig) (larry.Database, error) {
+func NewMultiDB(cfg *Config) (larry.Database, error) {
 	if cfg == nil {
 		return nil, larry.ErrInvalidConfig
 	}
@@ -157,28 +160,28 @@ func (b *multiDB) Open(ctx context.Context) error {
 	return err
 }
 
-func (l *multiDB) Close(ctx context.Context) error {
+func (b *multiDB) Close(ctx context.Context) error {
 	log.Tracef("Close")
 	defer log.Tracef("Close exit")
 
-	l.mtx.Lock()
-	defer l.mtx.Unlock()
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
 
-	if !l.open {
+	if !b.open {
 		return larry.ErrDBClosed
 	}
 
 	var errSeen error
 
-	for k, v := range l.pool {
+	for k, v := range b.pool {
 		if err := v.Close(ctx); err != nil {
 			log.Errorf("close %v: %v", k, err)
 			errSeen = errors.Join(errSeen, err)
 		}
-		delete(l.pool, k)
+		delete(b.pool, k)
 	}
 
-	l.open = false
+	b.open = false
 	return errSeen
 }
 
@@ -265,7 +268,7 @@ func (b *multiDB) NewRange(ctx context.Context, table string, start, end []byte)
 	return idb.NewRange(ctx, dbname, start, end)
 }
 
-func (b *multiDB) NewBatch(ctx context.Context) (larry.Batch, error) {
+func (b *multiDB) NewBatch(_ context.Context) (larry.Batch, error) {
 	return &multiBatch{
 		db:  b,
 		bts: make(map[string]larry.Batch, len(b.pool)),
@@ -372,39 +375,39 @@ type multiBatch struct {
 	bts map[string]larry.Batch
 }
 
-func (ab *multiBatch) addInternalBatch(ctx context.Context, table string) error {
-	idb, ok := ab.db.pool[table]
+func (mb *multiBatch) addInternalBatch(ctx context.Context, table string) error {
+	idb, ok := mb.db.pool[table]
 	if !ok {
 		return larry.ErrTableNotFound
 	}
 
-	if _, ok := ab.bts[table]; !ok {
+	if _, ok := mb.bts[table]; !ok {
 		ibt, err := idb.NewBatch(ctx)
 		if err != nil {
 			return fmt.Errorf("create internal batch %v: %w", table, err)
 		}
-		ab.bts[table] = ibt
+		mb.bts[table] = ibt
 	}
 
 	return nil
 }
 
-func (ab *multiBatch) Del(ctx context.Context, table string, key []byte) {
-	if err := ab.addInternalBatch(ctx, table); err != nil {
+func (mb *multiBatch) Del(ctx context.Context, table string, key []byte) {
+	if err := mb.addInternalBatch(ctx, table); err != nil {
 		log.Errorf("batch del %v: %v", table, err)
 		return
 	}
-	ab.bts[table].Del(ctx, dbname, key)
+	mb.bts[table].Del(ctx, dbname, key)
 }
 
-func (ab *multiBatch) Put(ctx context.Context, table string, key, value []byte) {
-	if err := ab.addInternalBatch(ctx, table); err != nil {
+func (mb *multiBatch) Put(ctx context.Context, table string, key, value []byte) {
+	if err := mb.addInternalBatch(ctx, table); err != nil {
 		log.Errorf("batch put %v: %v", table, err)
 		return
 	}
-	ab.bts[table].Put(ctx, dbname, key, value)
+	mb.bts[table].Put(ctx, dbname, key, value)
 }
 
-func (ab *multiBatch) Reset(ctx context.Context) {
-	ab.bts = make(map[string]larry.Batch, len(ab.db.pool))
+func (mb *multiBatch) Reset(_ context.Context) {
+	mb.bts = make(map[string]larry.Batch, len(mb.db.pool))
 }

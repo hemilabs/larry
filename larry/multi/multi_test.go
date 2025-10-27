@@ -16,7 +16,7 @@ func TestMultiDB(t *testing.T) {
 	dbFunc := func(home string, tables []string) larry.Database {
 		tm := make(map[string]string, len(tables))
 		for _, t := range tables {
-			tm[t] = "level"
+			tm[t] = TypeLevelDB
 		}
 		cfg := DefaultMultiConfig(home, tm)
 		db, err := NewMultiDB(cfg)
@@ -32,7 +32,7 @@ func BenchmarkLevelDB(b *testing.B) {
 	dbFunc := func(home string, tables []string) larry.Database {
 		tm := make(map[string]string, len(tables))
 		for _, t := range tables {
-			tm[t] = "level"
+			tm[t] = TypeLevelDB
 		}
 		cfg := DefaultMultiConfig(home, tm)
 		db, err := NewMultiDB(cfg)
