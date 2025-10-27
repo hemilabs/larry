@@ -41,6 +41,12 @@ The focus of Larry is not to create and maintain a series of database implementa
 |------------|---------------------------------------------|-------------|
 | TBD        | `------`                                    | ------      |
 
+## Multi
+
+MultiDB is a multiplexer to multiple Larry API compliant databases, where each is accessed as a table.
+
+This allows one to separate database tables into multiple files, use a different larry database implementation per table, as well as lock transactions to a specific table, rather than the entire database.
+
 ## License
 
 This project is licensed under the [MIT License](https://github.com/hemilabs/larry/blob/main/LICENSE).

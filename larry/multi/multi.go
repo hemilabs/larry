@@ -2,9 +2,10 @@
 // Use of this source code is governed by the MIT License,
 // which can be found in the LICENSE file.
 
-// Multi is a database multiplexer.
-// It allows one to use a different larry database per table,
-// but manage and perform operations under a common interface.
+// Package multi implements multi DB, a database multiplexer.
+// Each table in a multi DB is it's own larry database internally,
+// and a multi DB provides a unified interface for managing access
+// and performing operations on each one.
 package multi
 
 import (
@@ -60,11 +61,6 @@ func DefaultMultiConfig(home string, tables map[string]string) *MultiConfig {
 
 type pool map[string]larry.Database
 
-// MultiDB is a database multiplexer.
-// Each table in a MultiDB is their own larry db internally,
-// and MultiDB does all the heavy lifting of managing access
-// to each DB, while maintaining a unified interface for
-// performing operations on each one.
 type multiDB struct {
 	mtx sync.RWMutex
 
