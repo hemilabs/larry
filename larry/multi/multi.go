@@ -3,9 +3,30 @@
 // which can be found in the LICENSE file.
 
 // Package multi implements multi DB, a database multiplexer.
+//
 // Each table in a multi DB is it's own larry database internally,
 // and a multi DB provides a unified interface for managing access
 // and performing operations on each one.
+//
+// Typical use is as follows:
+// ```
+//
+//	home := "path/to/home"
+//	pool := map[string]string{
+//		"table1":          "leveldb",
+//		"sub/path/table2": "leveldb",
+//		...
+//		"table10":         "pebble",
+//	}
+//
+//	cfg := DefaultMultiConfig(home, pool)
+//	db, _ := NewMultiDB(cfg)
+//	if err := db.Open(ctx); err != nil {
+//		return error
+//	}
+//	val, _ := db.Get(ctx, "table2", key)
+//
+// ```
 package multi
 
 import (
