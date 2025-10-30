@@ -88,7 +88,7 @@ func KeyFromComposite(table string, key []byte) []byte {
 // snapshot of the database/table tuple and will not change for the duration of
 // the transaction. A read-write transaction has the same guarantees as the
 // read-only transaction however now one can also modify data.
-// Only a single read-write transaction maybe be open at a time. Transactions are
+// Only a single read-write transaction may be open at a time. Transactions are
 // taken on the entire database but the snapshot view is on a single table. One
 // should take great care to make transactions as short lived as possible.
 // Transactions make no guarantees about the returned key/value pairs. It's up

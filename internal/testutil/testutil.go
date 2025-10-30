@@ -1157,6 +1157,11 @@ func dbOpenCloseOpen(ctx context.Context, db larry.Database, table string) error
 	if err != nil {
 		return fmt.Errorf("db get: %w", err)
 	}
+	// make sure we can close with tx open
+	_, err = db.Begin(ctx, true)
+	if err != nil {
+		return fmt.Errorf("db begin: %w", err)
+	}
 	err = db.Close(ctx)
 	if err != nil {
 		return fmt.Errorf("db close: %w", err)
