@@ -112,10 +112,10 @@ func TestRawDBS(t *testing.T) {
 	}
 }
 
-func TestRemoteDBS(t *testing.T) {
-	if os.Getenv(DefaultMongoEnvURI) == "" {
-		t.Logf("%v env variable not set, skipping test", DefaultMongoEnvURI)
-		t.Skip()
-	}
-	testRawDB(t, "mongo")
-}
+// func TestRemoteDBS(t *testing.T) {
+// 	if os.Getenv(DefaultMongoEnvURI) == "" {
+// 		t.Logf("%v env variable not set, skipping test", DefaultMongoEnvURI)
+// 		t.Skip()
+// 	}
+// 	testRawDB(t, "mongo")
+// }

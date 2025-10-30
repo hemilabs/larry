@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -16,23 +17,19 @@ import (
 	"github.com/juju/loggo"
 
 	"github.com/hemilabs/larry/larry"
-	"github.com/hemilabs/larry/larry/badger"
-	"github.com/hemilabs/larry/larry/bitcask"
-	"github.com/hemilabs/larry/larry/level"
-	"github.com/hemilabs/larry/larry/nuts"
-	"github.com/hemilabs/larry/larry/pebble"
+	leveldb "github.com/hemilabs/larry/larry/level"
 )
 
 const (
 	logLevel = "INFO"
 
-	dbname   = "rawdb"
+	dbname   = ""
 	indexDir = "index"
 	DataDir  = "data"
 
 	DefaultMaxFileSize = 256 * 1024 * 1024 // 256MB file max; will never be bigger.
 
-	DefaultMongoEnvURI = "RAWDB_MONGO_URI" // XXX
+	TypeLevelDB = "leveldb"
 )
 
 var (
@@ -80,15 +77,9 @@ func New(cfg *Config) (*RawDB, error) {
 		return nil, fmt.Errorf("invalid max size: %v", cfg.MaxSize)
 	}
 
+	// TODO: add more dbs as they get added
 	switch cfg.DB {
-	case "badger":
-	case "level":
-	case "pebble":
-	case "bitcask":
-	case "nuts":
-
-	// remote
-	case "mongo":
+	case TypeLevelDB:
 	default:
 		return nil, fmt.Errorf("invalid db: %v", cfg.DB)
 	}
@@ -115,41 +106,10 @@ func (r *RawDB) Open(ctx context.Context) error {
 	}
 	// We do this late because directories are created at this point
 	switch r.cfg.DB {
-	case "badger":
-		bcfg := badger.DefaultBadgerConfig(filepath.Join(r.cfg.Home, indexDir),
+	case TypeLevelDB:
+		lcfg := leveldb.DefaultLevelConfig(filepath.Join(r.cfg.Home, indexDir),
 			[]string{dbname})
-		r.index, err = badger.NewBadgerDB(bcfg)
-	case "level":
-		lcfg := level.DefaultLevelConfig(filepath.Join(r.cfg.Home, indexDir),
-			[]string{dbname})
-		r.index, err = level.NewLevelDB(lcfg)
-	case "pebble":
-		pcfg := pebble.DefaultPebbleConfig(filepath.Join(r.cfg.Home, indexDir),
-			[]string{dbname})
-		r.index, err = pebble.NewPebbleDB(pcfg)
-	case "bitcask":
-		pcfg := bitcask.DefaultBitcaskConfig(filepath.Join(r.cfg.Home, indexDir),
-			[]string{dbname})
-		r.index, err = bitcask.NewBitcaskDB(pcfg)
-	// case "bunt":
-	// 	pcfg := bunt.DefaultBuntConfig(filepath.Join(r.cfg.Home, indexDir),
-	// 		[]string{dbname})
-	// 	r.index, err = bunt.NewBuntDB(pcfg)
-	// case "bbolt":
-	// 	pcfg := bbolt.DefaultBoltConfig(filepath.Join(r.cfg.Home, indexDir),
-	// 		[]string{dbname})
-	// 	r.index, err = bbolt.NewBoltDB(pcfg)
-	case "nuts":
-		pcfg := nuts.DefaultNutsConfig(filepath.Join(r.cfg.Home, indexDir),
-			[]string{dbname})
-		r.index, err = nuts.NewNutsDB(pcfg)
-
-	// remote
-	// case "mongo":
-	//	mcfg := larry.DefaultMongoConfig(os.Getenv(DefaultMongoEnvURI),
-	//		[]string{dbname})
-	//	r.index, err = larry.NewMongoDB(mcfg)
-
+		r.index, err = leveldb.NewLevelDB(lcfg)
 	default:
 	}
 	if err != nil {
@@ -248,7 +208,9 @@ func (r *RawDB) Insert(ctx context.Context, key, value []byte) error {
 				log.Errorf("close %v: %v", lastFilename, err)
 			}
 		}()
-		if fi, err := fh.Stat(); err != nil {
+
+		fi, err := fh.Stat()
+		if err != nil {
 			return err
 		} else if fi.Size()+int64(len(value)) > r.cfg.MaxSize {
 			last++
@@ -260,30 +222,41 @@ func (r *RawDB) Insert(ctx context.Context, key, value []byte) error {
 			}
 			tries++
 			continue
-		} else {
-			// Encoded coordinates.
-			c := make([]byte, 4+4+4)
-			binary.BigEndian.PutUint32(c[0:4], last)
-			binary.BigEndian.PutUint32(c[4:8], uint32(fi.Size()))
-			binary.BigEndian.PutUint32(c[8:12], uint32(len(value)))
-
-			// Append value to latest file.
-			n, err := fh.Write(value)
-			if err != nil {
-				return err
-			}
-			if n != len(value) {
-				return fmt.Errorf("partial write, data corruption: %v != %v", n, len(value))
-			}
-
-			// Write coordinates
-			err = r.index.Put(ctx, dbname, key, c)
-			if err != nil {
-				return err
-			}
-
-			return nil
 		}
+		// Encoded coordinates.
+		c := make([]byte, 4+4+4)
+		binary.BigEndian.PutUint32(c[0:4], last)
+
+		fis := fi.Size()
+		if fis < 0 || fis > math.MaxUint32 {
+			return fmt.Errorf("invalid file info conversion to uint32: %v",
+				fi.Size())
+		}
+		binary.BigEndian.PutUint32(c[4:8], uint32(fis))
+
+		vl := len(value)
+		if vl > math.MaxUint32 {
+			return fmt.Errorf("invalid len conversion to uint32: %v",
+				len(value))
+		}
+		binary.BigEndian.PutUint32(c[8:12], uint32(vl))
+
+		// Append value to latest file.
+		n, err := fh.Write(value)
+		if err != nil {
+			return err
+		}
+		if n != len(value) {
+			return fmt.Errorf("partial write, data corruption: %v != %v", n, len(value))
+		}
+
+		// Write coordinates
+		err = r.index.Put(ctx, dbname, key, c)
+		if err != nil {
+			return err
+		}
+
+		return nil
 	}
 }
 
