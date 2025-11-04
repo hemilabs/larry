@@ -1272,10 +1272,9 @@ func dbDumpRestorePipeline(ctx context.Context, db larry.Database, tables []stri
 	if err == nil {
 		return errors.New("dbhas: expected error")
 	}
-	larry.DefaultMaxRestoreChunk = 4096 // Many chunks
 	zr, _ := zstd.NewReader(&b)
 	jd := json.NewDecoder(zr)
-	err = larry.Restore(ctx, db, jd)
+	err = larry.Restore(ctx, db, jd, 4096)
 	if err != nil {
 		return fmt.Errorf("restore: %w", err)
 	}
@@ -1306,8 +1305,7 @@ func dbCopy(ctx context.Context, source, destination larry.Database, tables []st
 	}
 
 	larry.Verbose = true
-	larry.DefaultMaxRestoreChunk = 16384 // Many chunks
-	err = larry.Copy(ctx, true, source, destination, tables)
+	err = larry.Copy(ctx, true, source, destination, tables, 16384)
 	if err != nil {
 		return fmt.Errorf("copy: %w", err)
 	}
@@ -1332,7 +1330,7 @@ func dbCopy(ctx context.Context, source, destination larry.Database, tables []st
 		return fmt.Errorf("put %v in %v: %w", 18999, tables[4], err)
 	}
 
-	err = larry.Copy(ctx, true, source, destination, tables)
+	err = larry.Copy(ctx, true, source, destination, tables, 16384)
 	if err != nil {
 		return fmt.Errorf("copy 2: %w", err)
 	}

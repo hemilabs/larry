@@ -63,11 +63,9 @@ type Decoder interface {
 	Decode(v any) error
 }
 
-var (
-	DefaultMaxRestoreChunk = 256 * 1024 * 1024 // Maximum transaction size during restore.
+const DefaultMaxRestoreChunk = 256 * 1024 * 1024 // Maximum transaction size during restore.
 
-	Verbose = true // use logger to print progress
-)
+var Verbose = false // use logger to print progress
 
 // DumpTables is used to create a portable backup of a set of database tables.
 func DumpTables(ctx context.Context, db Database, tables []string, target Encoder) error {
@@ -96,7 +94,7 @@ func DumpTables(ctx context.Context, db Database, tables []string, target Encode
 }
 
 // Restore is used to replay a portable backup of a database.
-func Restore(ctx context.Context, db Database, source Decoder) error {
+func Restore(ctx context.Context, db Database, source Decoder, maxRestoreChunk int) error {
 	batch, err := db.NewBatch(ctx)
 	if err != nil {
 		return err
@@ -124,7 +122,7 @@ func Restore(ctx context.Context, db Database, source Decoder) error {
 
 			// Break out of loop to commit chunk.
 			totalWritten += len(op.Key) + len(op.Value)
-			if totalWritten > DefaultMaxRestoreChunk {
+			if totalWritten > maxRestoreChunk {
 				break
 			}
 		}
@@ -153,7 +151,7 @@ func commitChunk(ctx context.Context, db Database, batch Batch) error {
 }
 
 // Copy makes a copy of the source database tables to destination.
-func Copy(ctx context.Context, useCheckpoint bool, source, destination Database, tables []string) error {
+func Copy(ctx context.Context, useCheckpoint bool, source, destination Database, tables []string, maxRestoreChunk int) error {
 	total := 0
 	start := time.Now()
 	for _, table := range tables {
@@ -195,7 +193,7 @@ func Copy(ctx context.Context, useCheckpoint bool, source, destination Database,
 
 			chunk += len(key) + len(value)
 			total += len(key) + len(value)
-			if chunk > DefaultMaxRestoreChunk {
+			if chunk > maxRestoreChunk {
 				// Commit chunk.
 				if Verbose && total > 0 {
 					log.Infof("table: %v copied %v",
