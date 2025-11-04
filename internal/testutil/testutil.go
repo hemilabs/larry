@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -15,6 +17,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/hemilabs/larry/larry"
@@ -177,6 +180,62 @@ func RunLarryTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
 		}
 
 		if err := dbOpenCloseOpen(ctx, db, tables[0]); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("dump restore", func(t *testing.T) {
+		if !distributed {
+			t.Parallel()
+		}
+		db, tables := prepareTestSuite(ctx, t, 5, 0, dbFunc)
+		defer func() {
+			err := db.Close(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}()
+
+		if err := dbDumpRestorePipeline(ctx, db, tables); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("clone", func(t *testing.T) {
+		if !distributed {
+			t.Parallel()
+		}
+		source, _ := prepareTestSuite(ctx, t, 5, 0, dbFunc)
+		defer func() {
+			err := source.Close(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}()
+
+		destination, tables := prepareTestSuite(ctx, t, 5, 0, dbFunc)
+		defer func() {
+			err := destination.Close(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}()
+
+		if err := dbClone(ctx, source, destination, tables); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("hash table", func(t *testing.T) {
+		db, tables := prepareTestSuite(ctx, t, 1, 0, dbFunc)
+		defer func() {
+			err := db.Close(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}()
+
+		if err := dbHash(ctx, db, tables[0]); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -1175,6 +1234,166 @@ func dbOpenCloseOpen(ctx context.Context, db larry.Database, table string) error
 		return fmt.Errorf("db get 2: %w", err)
 	}
 
+	return nil
+}
+
+func dbDumpRestorePipeline(ctx context.Context, db larry.Database, tables []string) error {
+	// Puts
+	insertCount := 18999
+	err := dbputs(ctx, db, tables, insertCount)
+	if err != nil {
+		return fmt.Errorf("dbputs: %w", err)
+	}
+
+	// Get
+	err = dbgets(ctx, db, tables, insertCount)
+	if err != nil {
+		return fmt.Errorf("dbgets: %w", err)
+	}
+
+	// Dump
+	var b bytes.Buffer
+	zw, _ := zstd.NewWriter(&b)
+	je := json.NewEncoder(zw)
+	err = larry.DumpTables(ctx, db, tables, je)
+	if err != nil {
+		return fmt.Errorf("DumpTables: %w", err)
+	}
+	if err := zw.Close(); err != nil {
+		return fmt.Errorf("writer close: %w", err)
+	}
+
+	// Restore, del first
+	err = dbdels(ctx, db, tables, insertCount)
+	if err != nil {
+		return fmt.Errorf("dbdels: %w", err)
+	}
+	err = dbhas(ctx, db, tables, insertCount)
+	if err == nil {
+		return errors.New("dbhas: expected error")
+	}
+	larry.DefaultMaxRestoreChunk = 4096 // Many chunks
+	zr, _ := zstd.NewReader(&b)
+	jd := json.NewDecoder(zr)
+	err = larry.Restore(ctx, db, jd)
+	if err != nil {
+		return fmt.Errorf("restore: %w", err)
+	}
+	err = dbhas(ctx, db, tables, insertCount)
+	if err != nil {
+		return fmt.Errorf("dbhas: %w", err)
+	}
+	err = dbgets(ctx, db, tables, insertCount)
+	if err != nil {
+		return fmt.Errorf("dbgets end: %w", err)
+	}
+
+	return nil
+}
+
+func dbClone(ctx context.Context, source, destination larry.Database, tables []string) error {
+	// Puts
+	insertCount := 18999
+	err := dbputs(ctx, source, tables, insertCount)
+	if err != nil {
+		return fmt.Errorf("dbputs: %w", err)
+	}
+
+	// Get
+	err = dbgets(ctx, source, tables, insertCount)
+	if err != nil {
+		return fmt.Errorf("dbgets: %w", err)
+	}
+
+	larry.Verbose = true
+	larry.DefaultMaxRestoreChunk = 16384 // Many chunks
+	err = larry.Copy(ctx, true, source, destination, tables)
+	if err != nil {
+		return fmt.Errorf("copy: %w", err)
+	}
+
+	// Get and has destination
+	err = dbhas(ctx, destination, tables, insertCount)
+	if err != nil {
+		return fmt.Errorf("dbhas: %w", err)
+	}
+	err = dbgets(ctx, destination, tables, insertCount)
+	if err != nil {
+		return fmt.Errorf("dbgets: %w", err)
+	}
+
+	insertCount++
+	err = source.Put(ctx, tables[4], newKey(4), newVal(10))
+	if err != nil {
+		return fmt.Errorf("put key %v val %v in %v: %w", 4, 10, tables[4], err)
+	}
+	err = source.Put(ctx, tables[4], newKey(18999), newVal(18999))
+	if err != nil {
+		return fmt.Errorf("put %v in %v: %w", 18999, tables[4], err)
+	}
+
+	err = larry.Copy(ctx, true, source, destination, tables)
+	if err != nil {
+		return fmt.Errorf("copy 2: %w", err)
+	}
+
+	// Ensure checkpoint worked
+	val, err := destination.Get(ctx, tables[4], newKey(4))
+	if err != nil {
+		return fmt.Errorf("get %v in %v: %w", 4, tables[4], err)
+	}
+	if bytes.Equal(val, newVal(10)) {
+		return errors.New("expected value not copied when using checkpoint")
+	}
+	err = source.Put(ctx, tables[4], newKey(4), newVal(4))
+	if err != nil {
+		return fmt.Errorf("put %v in %v: %w", 4, tables[4], err)
+	}
+
+	// Get and has destination
+	err = dbhas(ctx, destination, tables, insertCount)
+	if err != nil {
+		return fmt.Errorf("dbhas end: %w", err)
+	}
+	err = dbgets(ctx, destination, tables, insertCount)
+	if err != nil {
+		return fmt.Errorf("dbgets end: %w", err)
+	}
+
+	for _, tb := range tables {
+		eq, _, err := larry.Compare(ctx, false, source, destination, tb)
+		if err != nil {
+			return fmt.Errorf("%v: %w", tb, err)
+		}
+		if !eq {
+			return fmt.Errorf("%v: databases mismatch", tb)
+		}
+	}
+
+	return nil
+}
+
+func dbHash(ctx context.Context, b larry.Database, table string) error {
+	if err := b.Put(ctx, table, []byte("abc"), []byte("def")); err != nil {
+		return err
+	}
+	if err := b.Put(ctx, table, []byte("hello"), []byte("world")); err != nil {
+		return err
+	}
+	if err := b.Put(ctx, table, []byte("123"), []byte("456")); err != nil {
+		return err
+	}
+	hash, err := larry.HashTable(ctx, b, table)
+	if err != nil {
+		return fmt.Errorf("HashTable: %w", err)
+	}
+	expected, err := hex.DecodeString("f76f84c181e88c2e9e40fa3a24948d82ca1d4cb9f62c3aed192fcb04418790dc")
+	if err != nil {
+		panic("could not decode hash")
+	}
+	if !bytes.Equal(hash[:], expected) {
+		return fmt.Errorf("got %x, expected %x", hash, expected)
+	}
 	return nil
 }
 

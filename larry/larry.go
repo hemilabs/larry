@@ -5,16 +5,19 @@
 package larry
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/juju/loggo"
 )
 
 const logLevel = "INFO"
 
-var _ = loggo.GetLogger("larry")
+var log = loggo.GetLogger("larry")
 
 func init() {
 	if err := loggo.ConfigureLoggers(logLevel); err != nil {
@@ -212,4 +215,37 @@ type Range interface {
 	Value(ctx context.Context) []byte
 
 	Close(ctx context.Context)
+}
+
+// HashTable creates a rolling hash of every key-value pair in a table.
+func HashTable(ctx context.Context, db Database, table string) ([32]byte, error) {
+	it, err := db.NewIterator(ctx, table)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	defer it.Close(ctx)
+	var tableHash [32]byte
+	for it.Next(ctx) {
+		var newHash []byte
+		newHash = append(tableHash[:], it.Key(ctx)...)
+		newHash = append(newHash, it.Value(ctx)...)
+		tableHash = sha256.Sum256(newHash)
+	}
+	return tableHash, nil
+}
+
+// NextByteSlice returns the next smallest byte slice
+// that is lexicographically greater than the input.
+func NextByteSlice(b []byte) (nb []byte) {
+	if len(b) < 1 {
+		nb = []byte{byte(0x00)}
+		return nb
+	}
+	nb = bytes.Clone(b)
+	if nb[len(nb)-1] < math.MaxUint8 {
+		nb[len(nb)-1]++
+		return nb
+	}
+	nb = append(nb, byte(0))
+	return nb
 }
