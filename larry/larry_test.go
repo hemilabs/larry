@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+
+	"github.com/davecgh/go-spew/spew"
 )
 
 func TestCompositeKey(t *testing.T) {
@@ -302,4 +304,49 @@ func TestDummy(t *testing.T) {
 	}
 
 	r.Close(ctx)
+}
+
+func TestNextByteSlice(t *testing.T) {
+	t.Parallel()
+
+	type testTableItem struct {
+		name     string
+		val      []byte
+		expected []byte
+	}
+	testTable := []testTableItem{
+		{
+			name:     "default",
+			val:      []byte("test0"),
+			expected: []byte("test1"),
+		},
+		{
+			name:     "empty",
+			val:      []byte{},
+			expected: []byte{byte(0x00)},
+		},
+		{
+			name:     "nil",
+			val:      nil,
+			expected: []byte{byte(0x00)},
+		},
+		{
+			name:     "max",
+			val:      []byte{byte(0xff), byte(0xff)},
+			expected: []byte{byte(0xff), byte(0xff), byte(0)},
+		},
+	}
+	for _, tti := range testTable {
+		t.Run(tti.name, func(t *testing.T) {
+			rb := NextByteSlice(tti.val)
+			if !bytes.Equal(rb, tti.expected) {
+				t.Fatalf("NextByteSlice: got %v, expected %v",
+					spew.Sdump(rb), spew.Sdump(tti.expected))
+			}
+			if bytes.Compare(rb, tti.val) != 1 {
+				t.Fatal("expected returned value > sent")
+			}
+			spew.Dump()
+		})
+	}
 }
