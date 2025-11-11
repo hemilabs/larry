@@ -358,9 +358,13 @@ func (ni *pebbleIterator) Value(_ context.Context) []byte {
 }
 
 func (ni *pebbleIterator) Close(_ context.Context) {
+	if ni.it == nil {
+		return
+	}
 	if err := ni.it.Close(); err != nil {
 		log.Errorf("iterator close: %v", err)
 	}
+	ni.it = nil
 }
 
 // Ranges
