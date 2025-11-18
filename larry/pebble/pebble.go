@@ -329,6 +329,7 @@ func (tx *pebbleTX) Write(_ context.Context, b larry.Batch) error {
 
 // Iterations
 type pebbleIterator struct {
+	mtx   sync.Mutex
 	table string
 	it    *pebble.Iterator
 }
@@ -358,13 +359,21 @@ func (ni *pebbleIterator) Value(_ context.Context) []byte {
 }
 
 func (ni *pebbleIterator) Close(_ context.Context) {
+	ni.mtx.Lock()
+	defer ni.mtx.Unlock()
+
+	if ni.it == nil {
+		return
+	}
 	if err := ni.it.Close(); err != nil {
 		log.Errorf("iterator close: %v", err)
 	}
+	ni.it = nil
 }
 
 // Ranges
 type pebbleRange struct {
+	mtx   sync.Mutex
 	table string
 	it    *pebble.Iterator
 	start []byte
@@ -392,9 +401,16 @@ func (nr *pebbleRange) Value(_ context.Context) []byte {
 }
 
 func (nr *pebbleRange) Close(_ context.Context) {
+	nr.mtx.Lock()
+	defer nr.mtx.Unlock()
+
+	if nr.it == nil {
+		return
+	}
 	if err := nr.it.Close(); err != nil {
 		log.Errorf("range close: %v", err)
 	}
+	nr.it = nil
 }
 
 // Batches

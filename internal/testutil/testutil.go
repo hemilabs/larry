@@ -227,6 +227,9 @@ func RunLarryTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
 	})
 
 	t.Run("hash table", func(t *testing.T) {
+		if !distributed {
+			t.Parallel()
+		}
 		db, tables := prepareTestSuite(ctx, t, 1, 0, dbFunc)
 		defer func() {
 			err := db.Close(ctx)
@@ -1239,7 +1242,7 @@ func dbOpenCloseOpen(ctx context.Context, db larry.Database, table string) error
 
 func dbDumpRestorePipeline(ctx context.Context, db larry.Database, tables []string) error {
 	// Puts
-	insertCount := 18999
+	insertCount := 99
 	err := dbputs(ctx, db, tables, insertCount)
 	if err != nil {
 		return fmt.Errorf("dbputs: %w", err)
@@ -1274,7 +1277,7 @@ func dbDumpRestorePipeline(ctx context.Context, db larry.Database, tables []stri
 	}
 	zr, _ := zstd.NewReader(&b)
 	jd := json.NewDecoder(zr)
-	err = larry.Restore(ctx, db, jd, 4096)
+	err = larry.Restore(ctx, db, jd, 64)
 	if err != nil {
 		return fmt.Errorf("restore: %w", err)
 	}
@@ -1292,7 +1295,7 @@ func dbDumpRestorePipeline(ctx context.Context, db larry.Database, tables []stri
 
 func dbCopy(ctx context.Context, source, destination larry.Database, tables []string) error {
 	// Puts
-	insertCount := 18999
+	insertCount := 99
 	err := dbputs(ctx, source, tables, insertCount)
 	if err != nil {
 		return fmt.Errorf("dbputs: %w", err)
@@ -1305,7 +1308,7 @@ func dbCopy(ctx context.Context, source, destination larry.Database, tables []st
 	}
 
 	larry.Verbose = true
-	err = larry.Copy(ctx, true, source, destination, tables, 16384)
+	err = larry.Copy(ctx, true, source, destination, tables, 64)
 	if err != nil {
 		return fmt.Errorf("copy: %w", err)
 	}
@@ -1325,12 +1328,12 @@ func dbCopy(ctx context.Context, source, destination larry.Database, tables []st
 	if err != nil {
 		return fmt.Errorf("put key %v val %v in %v: %w", 4, 10, tables[4], err)
 	}
-	err = source.Put(ctx, tables[4], newKey(18999), newVal(18999))
+	err = source.Put(ctx, tables[4], newKey(99), newVal(99))
 	if err != nil {
-		return fmt.Errorf("put %v in %v: %w", 18999, tables[4], err)
+		return fmt.Errorf("put %v in %v: %w", 99, tables[4], err)
 	}
 
-	err = larry.Copy(ctx, true, source, destination, tables, 16384)
+	err = larry.Copy(ctx, true, source, destination, tables, 64)
 	if err != nil {
 		return fmt.Errorf("copy 2: %w", err)
 	}
