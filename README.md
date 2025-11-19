@@ -18,7 +18,8 @@ go get github.com/hemilabs/larry
 
 ## Features
 
-Larry was originally designed to be integrated into other Hemi projects and repositories, as such it provides:
+Larry was originally designed to be integrated into other Hemi projects and
+repositories, as such it provides:
 
 - **Unified Interface**: Interact with multiple KV databases using a consistent API.
 - **Database Support**: Easily extendable to support various KV databases.
@@ -26,27 +27,31 @@ Larry was originally designed to be integrated into other Hemi projects and repo
 
 ## Supported Databases
 
-The focus of Larry is not to create and maintain a series of database implementations. However, several databases were adapted to conform to the Larry API, which you may use / modify for your own use-case:
+The focus of Larry is not to create and maintain a series of database implementations.
+However, several databases were adapted to conform to the Larry API, which you may
+use / modify for your own use-case:
 
 ### KV Databases
 
-| Database   | Driver                                      | Status      | 
+| Database   | Driver                                      | Status      |
 |------------|---------------------------------------------|-------------|
 | levelDB    | [`github.com/syndtr/goleveldb`](https://github.com/syndtr/goleveldb) | Supported   |
 | pebble     | [`github.com/cockroachdb/pebble`](https://github.com/cockroachdb/pebble) | Supported   |
 
-
 ### General Purpose
 
-| Database   | Driver                                      | Status      | 
+| Database   | Driver                                      | Status      |
 |------------|---------------------------------------------|-------------|
-| TBD        | `------`                                    | ------      |
+| clickhouse | [`github.com/ClickHouse/clickhouse-go`](https://github.com/ClickHouse/clickhouse-go) | Supported |
 
 ## Multi
 
-MultiDB is a multiplexer to multiple Larry API compliant databases, where each is accessed as a table.
+MultiDB is a multiplexer to multiple Larry API compliant databases, where each is
+accessed as a table.
 
-This allows one to separate database tables into multiple files, use a different larry database implementation per table, as well as lock transactions to a specific table, rather than the entire database.
+This allows one to separate database tables into multiple files, use a different
+larry database implementation per table, as well as lock transactions to a specific
+table, rather than the entire database.
 
 ## License
 

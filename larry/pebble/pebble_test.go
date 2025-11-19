@@ -11,27 +11,20 @@ import (
 	"github.com/hemilabs/larry/larry"
 )
 
+var dbFunc = func(home string, tables []string, _ map[string]string) larry.Database {
+	cfg := DefaultPebbleConfig(home, tables)
+	db, err := NewPebbleDB(cfg)
+	if err != nil {
+		panic(err)
+	}
+	return db
+}
+
 func TestPebble(t *testing.T) {
 	t.Parallel()
-	dbFunc := func(home string, tables []string, _ map[string]string) larry.Database {
-		cfg := DefaultPebbleConfig(home, tables)
-		db, err := NewPebbleDB(cfg)
-		if err != nil {
-			panic(err)
-		}
-		return db
-	}
 	testutil.RunLarryTests(t, dbFunc, false)
 }
 
 func BenchmarkPebble(b *testing.B) {
-	dbFunc := func(home string, tables []string, _ map[string]string) larry.Database {
-		cfg := DefaultPebbleConfig(home, tables)
-		db, err := NewPebbleDB(cfg)
-		if err != nil {
-			panic(err)
-		}
-		return db
-	}
 	testutil.RunLarryBatchBenchmarks(b, dbFunc)
 }

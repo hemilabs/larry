@@ -11,27 +11,20 @@ import (
 	"github.com/hemilabs/larry/larry"
 )
 
+var dbFunc = func(home string, tables []string, _ map[string]string) larry.Database {
+	cfg := DefaultLevelDBConfig(home, tables)
+	db, err := NewLevelDB(cfg)
+	if err != nil {
+		panic(err)
+	}
+	return db
+}
+
 func TestLevelDB(t *testing.T) {
 	t.Parallel()
-	dbFunc := func(home string, tables []string, _ map[string]string) larry.Database {
-		cfg := DefaultLevelDBConfig(home, tables)
-		db, err := NewLevelDB(cfg)
-		if err != nil {
-			panic(err)
-		}
-		return db
-	}
 	testutil.RunLarryTests(t, dbFunc, false)
 }
 
 func BenchmarkLevelDB(b *testing.B) {
-	dbFunc := func(home string, tables []string, _ map[string]string) larry.Database {
-		cfg := DefaultLevelDBConfig(home, tables)
-		db, err := NewLevelDB(cfg)
-		if err != nil {
-			panic(err)
-		}
-		return db
-	}
 	testutil.RunLarryBatchBenchmarks(b, dbFunc)
 }
