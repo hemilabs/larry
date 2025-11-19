@@ -13,7 +13,7 @@ import (
 
 func TestLevelDB(t *testing.T) {
 	t.Parallel()
-	dbFunc := func(home string, tables []string) larry.Database {
+	dbFunc := func(home string, tables []string, _ map[string]string) larry.Database {
 		cfg := DefaultLevelDBConfig(home, tables)
 		db, err := NewLevelDB(cfg)
 		if err != nil {
@@ -25,7 +25,7 @@ func TestLevelDB(t *testing.T) {
 }
 
 func BenchmarkLevelDB(b *testing.B) {
-	dbFunc := func(home string, tables []string) larry.Database {
+	dbFunc := func(home string, tables []string, _ map[string]string) larry.Database {
 		cfg := DefaultLevelDBConfig(home, tables)
 		db, err := NewLevelDB(cfg)
 		if err != nil {

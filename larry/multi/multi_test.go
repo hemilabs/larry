@@ -13,7 +13,7 @@ import (
 
 func TestMultiDB(t *testing.T) {
 	t.Parallel()
-	dbFunc := func(home string, tables []string) larry.Database {
+	dbFunc := func(home string, tables []string, _ map[string]string) larry.Database {
 		tm := make(map[string]string, len(tables))
 		for _, t := range tables {
 			tm[t] = TypeLevelDB
@@ -29,7 +29,7 @@ func TestMultiDB(t *testing.T) {
 }
 
 func BenchmarkMultiDB(b *testing.B) {
-	dbFunc := func(home string, tables []string) larry.Database {
+	dbFunc := func(home string, tables []string, _ map[string]string) larry.Database {
 		tm := make(map[string]string, len(tables))
 		for _, t := range tables {
 			tm[t] = TypeLevelDB

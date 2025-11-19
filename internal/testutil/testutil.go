@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"os"
 	"slices"
 	"testing"
 
@@ -23,7 +24,7 @@ import (
 	"github.com/hemilabs/larry/larry"
 )
 
-type NewDBFunc func(home string, tables []string) larry.Database
+type NewDBFunc func(home string, tables []string, opts map[string]string) larry.Database
 
 // RunLarryTests runs the suite of tests to assert correct functionality
 // of a larry db implementation. The distributed flag signals that tests
@@ -38,7 +39,7 @@ func RunLarryTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
 		if !distributed {
 			t.Parallel()
 		}
-		db, tables := prepareTestSuite(ctx, t, 5, 0, dbFunc)
+		db, tables := prepareTestSuite(ctx, t, 5, 0, dbFunc, nil)
 		defer func() {
 			err := db.Close(ctx)
 			if err != nil {
@@ -55,7 +56,7 @@ func RunLarryTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
 		if !distributed {
 			t.Parallel()
 		}
-		db, tables := prepareTestSuite(ctx, t, 5, 0, dbFunc)
+		db, tables := prepareTestSuite(ctx, t, 5, 0, dbFunc, nil)
 		defer func() {
 			err := db.Close(ctx)
 			if err != nil {
@@ -84,7 +85,7 @@ func RunLarryTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
 		if !distributed {
 			t.Parallel()
 		}
-		db, tables := prepareTestSuite(ctx, t, 3, insertCount, dbFunc)
+		db, tables := prepareTestSuite(ctx, t, 3, insertCount, dbFunc, nil)
 		defer func() {
 			err := db.Close(ctx)
 			if err != nil {
@@ -115,7 +116,7 @@ func RunLarryTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
 		if !distributed {
 			t.Parallel()
 		}
-		db, tables := prepareTestSuite(ctx, t, 3, insertCount, dbFunc)
+		db, tables := prepareTestSuite(ctx, t, 3, insertCount, dbFunc, nil)
 		defer func() {
 			err := db.Close(ctx)
 			if err != nil {
@@ -138,7 +139,7 @@ func RunLarryTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
 		if !distributed {
 			t.Parallel()
 		}
-		db, tables := prepareTestSuite(ctx, t, 1, 0, dbFunc)
+		db, tables := prepareTestSuite(ctx, t, 1, 0, dbFunc, nil)
 		defer func() {
 			err := db.Close(ctx)
 			if err != nil {
@@ -154,41 +155,11 @@ func RunLarryTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
 		}
 	})
 
-	t.Run("reopen", func(t *testing.T) {
-		if !distributed {
-			t.Parallel()
-		}
-		db, tables := prepareTestSuite(ctx, t, 1, 0, dbFunc)
-		defer func() {
-			err := db.Close(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-		}()
-
-		if distributed {
-			err := db.Close(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			db = reopen(dbFunc, tables)
-			err = db.Open(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-
-		if err := dbOpenCloseOpen(ctx, db, tables[0]); err != nil {
-			t.Fatal(err)
-		}
-	})
-
 	t.Run("dump restore", func(t *testing.T) {
 		if !distributed {
 			t.Parallel()
 		}
-		db, tables := prepareTestSuite(ctx, t, 5, 0, dbFunc)
+		db, tables := prepareTestSuite(ctx, t, 5, 0, dbFunc, nil)
 		defer func() {
 			err := db.Close(ctx)
 			if err != nil {
@@ -205,7 +176,7 @@ func RunLarryTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
 		if !distributed {
 			t.Parallel()
 		}
-		source, _ := prepareTestSuite(ctx, t, 5, 0, dbFunc)
+		source, _ := prepareTestSuite(ctx, t, 5, 0, dbFunc, nil)
 		defer func() {
 			err := source.Close(ctx)
 			if err != nil {
@@ -213,7 +184,8 @@ func RunLarryTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
 			}
 		}()
 
-		destination, tables := prepareTestSuite(ctx, t, 5, 0, dbFunc)
+		destination, tables := prepareTestSuite(ctx, t, 5, 0, dbFunc,
+			map[string]string{"level": ""})
 		defer func() {
 			err := destination.Close(ctx)
 			if err != nil {
@@ -230,7 +202,7 @@ func RunLarryTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
 		if !distributed {
 			t.Parallel()
 		}
-		db, tables := prepareTestSuite(ctx, t, 1, 0, dbFunc)
+		db, tables := prepareTestSuite(ctx, t, 1, 0, dbFunc, nil)
 		defer func() {
 			err := db.Close(ctx)
 			if err != nil {
@@ -239,6 +211,36 @@ func RunLarryTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
 		}()
 
 		if err := dbHash(ctx, db, tables[0]); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("reopen", func(t *testing.T) {
+		if !distributed {
+			t.Parallel()
+		}
+		db, tables := prepareTestSuite(ctx, t, 1, 0, dbFunc, nil)
+		defer func() {
+			err := db.Close(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}()
+
+		if distributed {
+			err := db.Close(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			db = dbFunc("", tables, map[string]string{"reopen": ""})
+			err = db.Open(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		if err := dbOpenCloseOpen(ctx, db, tables[0]); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -255,20 +257,21 @@ func RunLarryBatchBenchmarks(b *testing.B, dbFunc NewDBFunc) {
 	benchmarkLarryIter(ctx, b, dbFunc)
 }
 
-// TODO: populate this when distributed dbs are added
-func reopen(_ NewDBFunc, _ []string) larry.Database {
-	return nil
+func DockerTestCheck(t *testing.T) {
+	t.Helper()
+	if e := os.Getenv("LARRY_DOCKER_TESTS"); e != "1" {
+		t.Skip("Skipping Docker tests - LARRY_DOCKER_TESTS disabled or not set")
+	}
 }
 
-func prepareTestSuite(ctx context.Context, t *testing.T, tableCount, insert int, dbFunc NewDBFunc) (larry.Database, []string) {
+func prepareTestSuite(ctx context.Context, t *testing.T, tableCount, insert int, dbFunc NewDBFunc, opts map[string]string) (larry.Database, []string) {
 	home := t.TempDir()
-
 	tables := make([]string, 0, tableCount)
 	for i := range tableCount {
 		tables = append(tables, fmt.Sprintf("table%v", i))
 	}
 
-	db := dbFunc(home, tables)
+	db := dbFunc(home, tables, opts)
 	err := db.Open(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -1406,7 +1409,7 @@ func benchmarkLarryBatch(ctx context.Context, b *testing.B, dbFunc NewDBFunc) {
 
 			tables := []string{"t"}
 
-			db := dbFunc(home, tables)
+			db := dbFunc(home, tables, nil)
 			err := db.Open(ctx)
 			if err != nil {
 				b.Fatal(err)
@@ -1452,7 +1455,7 @@ func benchmarkLarryIter(ctx context.Context, b *testing.B, dbFunc NewDBFunc) {
 		table := "t"
 		tables := []string{table}
 
-		db := dbFunc(home, tables)
+		db := dbFunc(home, tables, nil)
 		err := db.Open(ctx)
 		if err != nil {
 			b.Fatal(err)
@@ -1501,7 +1504,7 @@ func benchmarkLarryGet(ctx context.Context, b *testing.B, dbFunc NewDBFunc) {
 			table := "t"
 			tables := []string{table}
 
-			db := dbFunc(home, tables)
+			db := dbFunc(home, tables, nil)
 			err := db.Open(ctx)
 			if err != nil {
 				b.Fatal(err)

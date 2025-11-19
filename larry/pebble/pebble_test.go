@@ -13,7 +13,7 @@ import (
 
 func TestPebble(t *testing.T) {
 	t.Parallel()
-	dbFunc := func(home string, tables []string) larry.Database {
+	dbFunc := func(home string, tables []string, _ map[string]string) larry.Database {
 		cfg := DefaultPebbleConfig(home, tables)
 		db, err := NewPebbleDB(cfg)
 		if err != nil {
@@ -25,7 +25,7 @@ func TestPebble(t *testing.T) {
 }
 
 func BenchmarkPebble(b *testing.B) {
-	dbFunc := func(home string, tables []string) larry.Database {
+	dbFunc := func(home string, tables []string, _ map[string]string) larry.Database {
 		cfg := DefaultPebbleConfig(home, tables)
 		db, err := NewPebbleDB(cfg)
 		if err != nil {
