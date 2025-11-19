@@ -104,9 +104,7 @@ func NewClickDB(cfg *ClickConfig) (larry.Database, error) {
 	bdb := &clickDB{
 		cfg:    cfg,
 		tables: make(map[string]struct{}, len(cfg.Tables)),
-		txChan: make(chan struct{}, 1),
 	}
-	bdb.txChan <- struct{}{}
 	for _, v := range cfg.Tables {
 		if _, ok := bdb.tables[v]; ok {
 			return nil, larry.ErrDuplicateTable
@@ -166,6 +164,9 @@ func (b *clickDB) Open(ctx context.Context) error {
 			return fmt.Errorf("create table %v: %w", table, err)
 		}
 	}
+
+	b.txChan = make(chan struct{}, 1)
+	b.txChan <- struct{}{}
 	b.open = true
 	return nil
 }
