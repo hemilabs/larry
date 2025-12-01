@@ -1,0 +1,735 @@
+// Copyright (c) 2025 Hemi Labs, Inc.
+// Use of this source code is governed by the MIT License,
+// which can be found in the LICENSE file.
+
+// Package clickhouse implements a Larry database backend using clickhouse.
+//
+// This package relies on an external clickhouse instance, which MUST have
+// experimental transaction support enabled.
+//
+// The URI for the provided clickhouse instance should follow a valid DSN
+// format, such as:
+// clickhouse://<address>:<port>?username=<username>&password=<password>
+package clickhouse
+
+import (
+	"container/list"
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	click "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/proto"
+	"github.com/juju/loggo"
+
+	"github.com/hemilabs/larry/larry"
+)
+
+const (
+	logLevel = "INFO"
+
+	maxBatchDelKeys   = 100
+	batchOptimizeStep = 50
+	blockBufferSize   = 10
+)
+
+var log = loggo.GetLogger("clickhouse")
+
+func init() {
+	if err := loggo.ConfigureLoggers(logLevel); err != nil {
+		panic(err)
+	}
+}
+
+// Assert required interfaces
+var (
+	_ larry.Batch       = (*clickBatch)(nil)
+	_ larry.Database    = (*clickDB)(nil)
+	_ larry.Iterator    = (*clickIterator)(nil)
+	_ larry.Range       = (*clickRange)(nil)
+	_ larry.Transaction = (*clickTX)(nil)
+)
+
+func xerr(err error) error {
+	if err == nil {
+		return nil
+	}
+	perr := &proto.Exception{}
+	ok := errors.As(err, &perr)
+	if ok {
+		switch perr.Code {
+		case 386: // empty key
+			err = nil
+		}
+	} else {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			err = larry.ErrKeyNotFound
+		}
+	}
+	return err
+}
+
+type ClickConfig struct {
+	URI        string
+	Tables     []string
+	DropTables bool
+}
+
+func DefaultClickConfig(URI string, tables []string) *ClickConfig {
+	return &ClickConfig{
+		URI:    URI,
+		Tables: tables,
+	}
+}
+
+type clickDB struct {
+	db     driver.Conn
+	cfg    *ClickConfig
+	tables map[string]struct{}
+
+	mtx    sync.Mutex
+	txChan chan struct{}
+	open   bool
+}
+
+func NewClickDB(cfg *ClickConfig) (larry.Database, error) {
+	if cfg == nil {
+		return nil, larry.ErrInvalidConfig
+	}
+	bdb := &clickDB{
+		cfg:    cfg,
+		tables: make(map[string]struct{}, len(cfg.Tables)),
+	}
+	for _, v := range cfg.Tables {
+		if _, ok := bdb.tables[v]; ok {
+			return nil, larry.ErrDuplicateTable
+		}
+		bdb.tables[v] = struct{}{}
+	}
+	return bdb, nil
+}
+
+func (b *clickDB) Open(ctx context.Context) error {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+
+	if b.open {
+		return larry.ErrDBOpen
+	}
+
+	opt, err := click.ParseDSN(b.cfg.URI)
+	if err != nil {
+		return fmt.Errorf("parse URI: %w", err)
+	}
+	// opt.Debug = true
+	// opt.Debugf = func(format string, v ...any) {
+	// 	fmt.Printf(format+"\n", v...)
+	// }
+
+	conn, err := click.Open(opt)
+	if err != nil {
+		return fmt.Errorf("open conn: %w", err)
+	}
+	if err := conn.Ping(ctx); err != nil {
+		exception := &click.Exception{}
+		if errors.As(err, &exception) {
+			log.Errorf("Exception [%d] %s \n%s\n", exception.Code, exception.Message, exception.StackTrace)
+		}
+		return err
+	}
+	b.db = conn
+
+	if b.cfg.DropTables {
+		for _, table := range b.cfg.Tables {
+			err := conn.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS `%s`", table))
+			if err != nil {
+				return fmt.Errorf("drop table %v: %w", table, err)
+			}
+		}
+	}
+
+	for _, table := range b.cfg.Tables {
+		err := conn.Exec(ctx, fmt.Sprintf(`  
+    	CREATE TABLE IF NOT EXISTS %s (  
+        key String,  
+        value String  
+    	) ENGINE = ReplacingMergeTree ORDER BY (key) 
+		SETTINGS enable_block_offset_column = 1, enable_block_number_column = 1`, table))
+		if err != nil {
+			return fmt.Errorf("create table %v: %w", table, err)
+		}
+	}
+
+	b.txChan = make(chan struct{}, 1)
+	b.txChan <- struct{}{}
+	b.open = true
+	return nil
+}
+
+func (b *clickDB) Close(_ context.Context) error {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+
+	if !b.open {
+		return larry.ErrDBClosed
+	}
+
+	if err := xerr(b.db.Close()); err != nil {
+		return err
+	}
+	b.open = false
+	return nil
+}
+
+func (b *clickDB) Del(ctx context.Context, table string, key []byte) error {
+	if _, ok := b.tables[table]; !ok {
+		return larry.ErrTableNotFound
+	}
+	cmd := fmt.Sprintf("DELETE FROM %s WHERE key = $1", table)
+	err := b.db.Exec(ctx, cmd, string(key))
+	return xerr(err)
+}
+
+func (b *clickDB) Has(ctx context.Context, table string, key []byte) (bool, error) {
+	if _, ok := b.tables[table]; !ok {
+		return false, larry.ErrTableNotFound
+	}
+	cmd := fmt.Sprintf("SELECT EXISTS(SELECT key FROM %s FINAL WHERE key = $1)", table)
+	var exists uint8
+	err := b.db.QueryRow(ctx, cmd, string(key)).Scan(&exists)
+	if err != nil {
+		return false, xerr(err)
+	}
+
+	return exists == 1, nil
+}
+
+func (b *clickDB) Get(ctx context.Context, table string, key []byte) ([]byte, error) {
+	if _, ok := b.tables[table]; !ok {
+		return nil, larry.ErrTableNotFound
+	}
+	cmd := fmt.Sprintf(`SELECT value FROM %s FINAL WHERE key = $1`, table)
+	var val string
+	err := b.db.QueryRow(ctx, cmd, string(key)).Scan(&val)
+	if err != nil {
+		return nil, xerr(err)
+	}
+	return []byte(val), nil
+}
+
+func (b *clickDB) Put(ctx context.Context, table string, key, value []byte) error {
+	if _, ok := b.tables[table]; !ok {
+		return larry.ErrTableNotFound
+	}
+	if key == nil {
+		return nil
+	}
+	cmd := fmt.Sprintf("INSERT INTO %s (key, value) VALUES ($1, $2)", table)
+	err := b.db.Exec(ctx, cmd, string(key), string(value))
+	return xerr(err)
+}
+
+func (b *clickDB) Begin(ctx context.Context, _ bool) (larry.Transaction, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-b.txChan:
+	}
+	cfg := *b.cfg
+	cfg.DropTables = false
+	txp, err := NewClickDB(&cfg)
+	if err != nil {
+		return nil, err
+	}
+	tx, ok := txp.(*clickDB)
+	if !ok {
+		panic("new returned unknown db type")
+	}
+	if err := tx.Open(ctx); err != nil {
+		return nil, err
+	}
+	err = tx.db.Exec(ctx, "BEGIN TRANSACTION")
+	if err != nil {
+		if err := tx.Close(ctx); err != nil {
+			log.Errorf("tx begin: close tx db: %v", err)
+		}
+		return nil, err
+	}
+	return &clickTX{
+		tx: tx,
+		db: b,
+	}, nil
+}
+
+func (b *clickDB) execute(ctx context.Context, write bool, callback func(ctx context.Context, tx larry.Transaction) error) error {
+	tx, err := b.Begin(ctx, write)
+	if err != nil {
+		return err
+	}
+	err = callback(ctx, tx)
+	if err != nil {
+		if cerr := tx.Rollback(ctx); cerr != nil {
+			return fmt.Errorf("rollback %w: %w", cerr, err)
+		}
+		return err
+	}
+
+	if !write {
+		return tx.Rollback(ctx)
+	}
+	return tx.Commit(ctx)
+}
+
+func (b *clickDB) View(ctx context.Context, callback func(ctx context.Context, tx larry.Transaction) error) error {
+	return b.execute(ctx, false, callback)
+}
+
+func (b *clickDB) Update(ctx context.Context, callback func(ctx context.Context, tx larry.Transaction) error) error {
+	return b.execute(ctx, true, callback)
+}
+
+func (b *clickDB) NewIterator(pctx context.Context, table string) (larry.Iterator, error) {
+	if _, ok := b.tables[table]; !ok {
+		return nil, larry.ErrTableNotFound
+	}
+
+	ctx := click.Context(pctx, click.WithBlockBufferSize(blockBufferSize))
+
+	cmd := fmt.Sprintf("SELECT * FROM %s FINAL ORDER BY key", table)
+	rows, err := b.db.Query(ctx, cmd)
+	if err != nil {
+		return nil, err
+	}
+	return &clickIterator{
+		db:    b,
+		it:    rows,
+		table: table,
+	}, nil
+}
+
+func (b *clickDB) NewRange(pctx context.Context, table string, start, end []byte) (larry.Range, error) {
+	if _, ok := b.tables[table]; !ok {
+		return nil, larry.ErrTableNotFound
+	}
+
+	ctx := click.Context(pctx, click.WithBlockBufferSize(blockBufferSize))
+
+	cmd := fmt.Sprintf(`SELECT * FROM %s FINAL WHERE 
+		key >= $1`, table)
+	if end != nil {
+		cmd += limitRangeStmt
+	}
+	cmd += " ORDER BY key"
+	rows, err := b.db.Query(ctx, cmd, string(start), string(end))
+	if err != nil {
+		return nil, err
+	}
+	return &clickRange{
+		db:    b,
+		it:    rows,
+		table: table,
+
+		start: string(start),
+		end:   string(end),
+	}, nil
+}
+
+func (b *clickDB) NewBatch(_ context.Context) (larry.Batch, error) {
+	return &clickBatch{wb: new(list.List)}, nil
+}
+
+// Transactions
+type clickTX struct {
+	tx *clickDB
+	db *clickDB
+}
+
+func (tx *clickTX) Del(ctx context.Context, table string, key []byte) error {
+	if _, ok := tx.db.tables[table]; !ok {
+		return larry.ErrTableNotFound
+	}
+	cmd := fmt.Sprintf(`DELETE FROM %s WHERE key = $1 SETTINGS 
+	lightweight_delete_mode = 'lightweight_update', lightweight_deletes_sync = 0`, table)
+	err := tx.tx.db.Exec(ctx, cmd, string(key))
+	return xerr(err)
+}
+
+func (tx *clickTX) Has(ctx context.Context, table string, key []byte) (bool, error) {
+	if _, ok := tx.db.tables[table]; !ok {
+		return false, larry.ErrTableNotFound
+	}
+	cmd := fmt.Sprintf("SELECT EXISTS(SELECT key FROM %s FINAL WHERE key = $1)", table)
+	var exists int
+	err := tx.tx.db.QueryRow(ctx, cmd, string(key)).Scan(&exists)
+	if err != nil {
+		return false, xerr(err)
+	}
+	return exists == 1, nil
+}
+
+func (tx *clickTX) Get(ctx context.Context, table string, key []byte) ([]byte, error) {
+	if _, ok := tx.db.tables[table]; !ok {
+		return nil, larry.ErrTableNotFound
+	}
+	cmd := fmt.Sprintf("SELECT value FROM %s FINAL WHERE key = $1", table)
+	var val string
+	err := tx.tx.db.QueryRow(ctx, cmd, string(key)).Scan(&val)
+	if err != nil {
+		return nil, xerr(err)
+	}
+	return []byte(val), nil
+}
+
+func (tx *clickTX) Put(ctx context.Context, table string, key []byte, value []byte) error {
+	if _, ok := tx.db.tables[table]; !ok {
+		return larry.ErrTableNotFound
+	}
+	if key == nil {
+		return nil
+	}
+	cmd := fmt.Sprintf("INSERT INTO %s (key, value) VALUES ($1, $2)", table)
+	err := tx.tx.db.Exec(ctx, cmd, string(key), string(value))
+	return xerr(err)
+}
+
+func (tx *clickTX) Commit(ctx context.Context) error {
+	err := tx.tx.db.Exec(ctx, "COMMIT")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		tx.db.txChan <- struct{}{}
+	}()
+	if err = tx.tx.Close(ctx); err != nil {
+		log.Errorf("tx commit: close tx db: %v", err)
+	}
+	return nil
+}
+
+func (tx *clickTX) Rollback(ctx context.Context) error {
+	err := tx.tx.db.Exec(ctx, "ROLLBACK")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		tx.db.txChan <- struct{}{}
+	}()
+	if err := tx.tx.Close(ctx); err != nil {
+		log.Errorf("tx rollback: close tx db: %v", err)
+	}
+	return err
+}
+
+func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
+	bb, ok := b.(*clickBatch)
+	if !ok {
+		return fmt.Errorf("unexpected batch type: %T", b)
+	}
+	log.Debugf("writing batch of size %v", bb.wb.Len()+1)
+	bb.flushOps()
+	i := 1
+	for e := bb.wb.Front(); e != nil; e = e.Next() {
+		op, ok := e.Value.(batchOp)
+		if !ok {
+			return fmt.Errorf("unexpected batch element type %T", e.Value)
+		}
+		if _, ok := tx.db.tables[op.table]; !ok {
+			return larry.ErrTableNotFound
+		}
+		if i%batchOptimizeStep == 0 {
+			start := time.Now()
+			err := tx.tx.db.Exec(ctx, "OPTIMIZE TABLE "+op.table)
+			if err != nil {
+				return fmt.Errorf("optimize table: %w", err)
+			}
+			log.Debugf("%v: optimized %v in %v", i, op.table, time.Since(start))
+		}
+		switch op.op {
+		case larry.OpDel:
+			delKeys := make([]any, 0, maxBatchDelKeys)
+			pair := op.pairs.Front()
+			for pair != nil {
+				kv, ok := pair.Value.(kvPair)
+				if !ok {
+					return fmt.Errorf("opDel: expected kkPair, got %T", pair.Value)
+				}
+				pair = pair.Next()
+				delKeys = append(delKeys, string(kv.key))
+				if len(delKeys) >= maxBatchDelKeys || pair == nil {
+					start := time.Now()
+					var plug string
+					for j := range delKeys {
+						plug += fmt.Sprintf("$%d, ", j+1)
+					}
+					stmt := fmt.Sprintf(`DELETE FROM %s WHERE key IN (%s) SETTINGS 
+					lightweight_delete_mode = 'lightweight_update', 
+					lightweight_deletes_sync = 0`, op.table, plug)
+					err := tx.tx.db.Exec(ctx, stmt, delKeys...)
+					if err != nil {
+						return fmt.Errorf("flush DEL batch: %w", err)
+					}
+					log.Debugf("%v: wrote DEL with %v keys in %v", i,
+						len(delKeys), time.Since(start))
+					delKeys = make([]any, 0, maxBatchDelKeys)
+				}
+			}
+		case larry.OpPut:
+			start := time.Now()
+			batch, err := tx.tx.db.PrepareBatch(ctx,
+				"INSERT INTO "+op.table)
+			if err != nil {
+				return fmt.Errorf("opPut: %w", err)
+			}
+			defer func() {
+				if err := batch.Close(); err != nil {
+					log.Errorf("opPut: close batch: %v", err.Error())
+				}
+			}()
+			for pair := op.pairs.Front(); pair != nil; pair = pair.Next() {
+				kv, ok := pair.Value.(kvPair)
+				if !ok {
+					return fmt.Errorf("opPut: expected kkPair, got %T", pair.Value)
+				}
+				err := batch.Append(string(kv.key), string(kv.value))
+				if err != nil {
+					return fmt.Errorf("opPut batch append: %w", err)
+				}
+			}
+			if err := batch.Send(); err != nil {
+				return fmt.Errorf("opPut commit: %w", err)
+			}
+			log.Debugf("%v: wrote PUT in %v", i, time.Since(start))
+		default:
+			return fmt.Errorf("unknown operation: %v", op.op)
+		}
+		i++
+	}
+	return nil
+}
+
+type clickIterator struct {
+	db    *clickDB
+	it    driver.Rows
+	table string
+
+	key, value string
+}
+
+func (ni *clickIterator) First(pctx context.Context) bool {
+	ni.key = ""
+	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
+	cmd := fmt.Sprintf("SELECT * FROM %s FINAL ORDER BY key", ni.table)
+	rows, err := ni.db.db.Query(ctx, cmd)
+	if err != nil {
+		log.Errorf("first query: %s", err.Error())
+	}
+	if err := ni.it.Close(); err != nil {
+		log.Errorf("close iterator: %v", err)
+	}
+	ni.it = rows
+	return ni.Next(ctx)
+}
+
+func (ni *clickIterator) Last(pctx context.Context) bool {
+	ni.key = ""
+	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
+	cmd := fmt.Sprintf("SELECT * FROM %s FINAL ORDER BY key DESC LIMIT 1", ni.table)
+	rows, err := ni.db.db.Query(ctx, cmd)
+	if err != nil {
+		log.Errorf("last query: %s", err.Error())
+	}
+	if err := ni.it.Close(); err != nil {
+		log.Errorf("close iterator: %v", err)
+	}
+	ni.it = rows
+	return ni.Next(ctx)
+}
+
+func (ni *clickIterator) Next(_ context.Context) bool {
+	ni.key = ""
+	return ni.it.Next()
+}
+
+func (ni *clickIterator) Seek(pctx context.Context, key []byte) bool {
+	ni.key = ""
+	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
+	cmd := fmt.Sprintf("SELECT * FROM %s FINAL WHERE key >= $1 ORDER BY key", ni.table)
+	rows, err := ni.db.db.Query(ctx, cmd, string(key))
+	if err != nil {
+		log.Errorf("seek query: %s", err.Error())
+	}
+	if err := ni.it.Close(); err != nil {
+		log.Errorf("close iterator: %v", err)
+	}
+	ni.it = rows
+	return ni.Next(ctx)
+}
+
+func (ni *clickIterator) parseRow(_ context.Context) {
+	if err := ni.it.Scan(&ni.key, &ni.value); err != nil {
+		log.Errorf("scan row")
+	}
+}
+
+func (ni *clickIterator) Key(ctx context.Context) []byte {
+	if ni.key == "" {
+		ni.parseRow(ctx)
+	}
+	return []byte(ni.key)
+}
+
+func (ni *clickIterator) Value(ctx context.Context) []byte {
+	if ni.key == "" {
+		ni.parseRow(ctx)
+	}
+	return []byte(ni.value)
+}
+
+func (ni *clickIterator) Close(_ context.Context) {
+	if err := ni.it.Close(); err != nil {
+		log.Errorf("failed to close rows: %v", err)
+	}
+}
+
+type clickRange struct {
+	db    *clickDB
+	it    driver.Rows
+	table string
+
+	start, end string
+	key, value string
+}
+
+// helper statement
+const limitRangeStmt = " AND key < $2"
+
+func (ni *clickRange) First(pctx context.Context) bool {
+	ni.key = ""
+	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
+	cmd := fmt.Sprintf("SELECT * FROM %s FINAL WHERE key >= $1", ni.table)
+	if ni.end != "" {
+		cmd += limitRangeStmt
+	}
+	rows, err := ni.db.db.Query(ctx, cmd, ni.start, ni.end)
+	if err != nil {
+		log.Errorf("first query: %s", err.Error())
+	}
+	if err := ni.it.Close(); err != nil {
+		log.Errorf("close iterator: %v", err)
+	}
+	ni.it = rows
+	return ni.Next(ctx)
+}
+
+func (ni *clickRange) Last(pctx context.Context) bool {
+	ni.key = ""
+	ctx := click.Context(pctx, click.WithBlockBufferSize(10))
+	cmd := fmt.Sprintf(`SELECT * FROM %s FINAL 
+	WHERE key >= $1`, ni.table)
+	if ni.end != "" {
+		cmd += limitRangeStmt
+	}
+	cmd += " ORDER BY key DESC LIMIT 1"
+	rows, err := ni.db.db.Query(ctx, cmd, ni.start, ni.end)
+	if err != nil {
+		log.Errorf("last query: %s", err.Error())
+	}
+	if err := ni.it.Close(); err != nil {
+		log.Errorf("close iterator: %v", err)
+	}
+	ni.it = rows
+	return ni.Next(ctx)
+}
+
+func (ni *clickRange) Next(_ context.Context) bool {
+	ni.key = ""
+	return ni.it.Next()
+}
+
+func (ni *clickRange) parseRow(_ context.Context) {
+	if err := ni.it.Scan(&ni.key, &ni.value); err != nil {
+		log.Errorf("scan row")
+	}
+}
+
+func (ni *clickRange) Key(ctx context.Context) []byte {
+	if ni.key == "" {
+		ni.parseRow(ctx)
+	}
+	return []byte(ni.key)
+}
+
+func (ni *clickRange) Value(ctx context.Context) []byte {
+	if ni.key == "" {
+		ni.parseRow(ctx)
+	}
+	return []byte(ni.value)
+}
+
+func (ni *clickRange) Close(_ context.Context) {
+	if err := ni.it.Close(); err != nil {
+		log.Errorf("failed to close rows: %v", err)
+	}
+}
+
+// Batches
+
+type kvPair struct {
+	key, value []byte
+}
+
+type batchOp struct {
+	op    larry.OperationT
+	table string
+	pairs *list.List // elements of type kvPair
+}
+
+type clickBatch struct {
+	wb     *list.List // elements of type batchOp
+	curMap map[string]batchOp
+	curOp  larry.OperationT
+}
+
+func (nb *clickBatch) flushOps() {
+	for _, bop := range nb.curMap {
+		nb.wb.PushBack(bop)
+	}
+	nb.curMap = make(map[string]batchOp)
+}
+
+func (nb *clickBatch) Del(_ context.Context, table string, key []byte) {
+	if nb.curOp != larry.OpDel {
+		nb.flushOps()
+		nb.curOp = larry.OpDel
+	}
+	if bop, ok := nb.curMap[table]; ok {
+		bop.pairs.PushBack(kvPair{key: key})
+		return
+	}
+	bop := batchOp{op: larry.OpDel, table: table, pairs: new(list.List)}
+	bop.pairs.PushBack(kvPair{key: key})
+	nb.curMap[table] = bop
+}
+
+func (nb *clickBatch) Put(_ context.Context, table string, key, value []byte) {
+	if nb.curOp != larry.OpPut {
+		nb.flushOps()
+		nb.curOp = larry.OpPut
+	}
+	if bop, ok := nb.curMap[table]; ok {
+		bop.pairs.PushBack(kvPair{key: key, value: value})
+		return
+	}
+	bop := batchOp{op: larry.OpPut, table: table, pairs: new(list.List)}
+	bop.pairs.PushBack(kvPair{key: key, value: value})
+	nb.curMap[table] = bop
+}
+
+func (nb *clickBatch) Reset(_ context.Context) {
+	nb.wb.Init()
+}

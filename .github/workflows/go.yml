@@ -58,7 +58,9 @@ jobs:
           cache: true
           check-latest: true
 
-      - name: "make test"
+      - name: "make test (with docker)"
+        env:
+          LARRY_DOCKER_TESTS: "1"
         run: make GOCACHE="$(go env GOCACHE)" test
 
   test-race:
