@@ -31,14 +31,13 @@ type NewDBFunc func(home string, tables []string, opts map[string]string) larry.
 // can't be run in parallel, or should perform additional steps during
 // test execution.
 func RunLarryTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
+	ctx := t.Context()
 	const insertCount = 10
 	t.Run("basic", func(t *testing.T) {
 		if !distributed {
 			t.Parallel()
 		}
+
 		db, tables := prepareTestSuite(ctx, t, 5, 0, dbFunc, nil)
 		defer func() {
 			err := db.Close(ctx)
