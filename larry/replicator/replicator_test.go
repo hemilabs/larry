@@ -235,6 +235,7 @@ const (
 )
 
 func TestReplicator(t *testing.T) {
+	t.Parallel()
 	dbFunc := func(home string, tables []string, _ map[string]string) larry.Database {
 		home1 := filepath.Join(home, "1")
 		cfg1 := leveldb.DefaultLevelDBConfig(home1, tables)
@@ -509,8 +510,12 @@ func TestReplicateRetry(t *testing.T) {
 	}
 
 	// Restart db
-	time.Sleep(time.Second)
-	if err := dbDestination.Open(ctx); err != nil {
+	if err := db.Close(ctx); err != nil {
+		if !errors.Is(err, larry.ErrDBClosed) {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Open(ctx); err != nil {
 		t.Fatal(err)
 	}
 	// poke sink since this test uses external stimuli
