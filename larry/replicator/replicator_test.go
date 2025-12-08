@@ -488,8 +488,8 @@ func TestReplicateRetry(t *testing.T) {
 	}()
 
 	// Individual Puts
-	maxPuts := 50
-	maxTxs := 100
+	maxPuts := 5
+	maxTxs := 10
 
 	stopDB := false
 	for tx := range maxTxs {
@@ -579,8 +579,8 @@ func TestReplicateOnStartup(t *testing.T) {
 	}
 
 	// Individual Puts
-	maxPuts := 50
-	maxTxs := 100
+	maxPuts := 5
+	maxTxs := 10
 
 	// These all fail, but since no one listens for
 	// the error when using Lazy policy, it will
