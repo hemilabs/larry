@@ -2,6 +2,8 @@
 // Use of this source code is governed by the MIT License,
 // which can be found in the LICENSE file.
 
+// Package replicator implements a replicator, used to replay and
+// translate operations performed in a Larry database, to another.
 package replicator
 
 import (

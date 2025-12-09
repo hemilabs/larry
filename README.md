@@ -53,6 +53,17 @@ This allows one to separate database tables into multiple files, use a different
 larry database implementation per table, as well as lock transactions to a specific
 table, rather than the entire database.
 
+## Replicator
+
+The Replicator implementation can be used to copy and "translate" the contents of
+one Larry API compliant database to another (e.g., leveldb to mongoDB).
+
+It functions by keeping a log of the operations performed in the source DB using
+the Larry API, which are then replayed in the destination DB, either in a synchronous
+(direct mode) or asynchronous (lazy mode) manner.
+
+![Replicator Diagram](images/Replicator.svg)
+
 ## License
 
 This project is licensed under the [MIT License](https://github.com/hemilabs/larry/blob/main/LICENSE).
