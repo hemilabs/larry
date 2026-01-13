@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Hemi Labs, Inc.
+// Copyright (c) 2025-2026 Hemi Labs, Inc.
 // Use of this source code is governed by the MIT License,
 // which can be found in the LICENSE file.
 
@@ -23,6 +23,8 @@ import (
 	"github.com/hemilabs/larry/larry"
 	"github.com/hemilabs/larry/larry/clickhouse"
 	"github.com/hemilabs/larry/larry/leveldb"
+	"github.com/hemilabs/larry/larry/multi"
+	"github.com/hemilabs/larry/larry/pebble"
 )
 
 func TestJournalEncoding(t *testing.T) {
@@ -161,59 +163,76 @@ func tablePut(ctx context.Context, db larry.Database, table string, offset, batc
 
 func createReplicator(t *testing.T, policy Policy, home, srcType, dstType string, tables []string) (larry.Database, larry.Database) {
 	// Create destination database
-	var dbDestination larry.Database
-	switch dstType {
-	case "clickhouse":
-		c, err := testutil.CreateClickContainer(t.Context(), t)
-		if err != nil {
-			t.Fatal(err)
+	db := make([]larry.Database, 2)
+	for i, dbt := range []string{srcType, dstType} {
+		path := "source"
+		if i != 0 {
+			path = "destination"
 		}
-		conn, err := c.ConnectionString(t.Context())
-		if err != nil {
-			t.Fatal(err)
+		switch dbt {
+		case "clickhouse":
+			c, err := testutil.CreateClickContainer(t.Context(), t)
+			if err != nil {
+				t.Error(err)
+			}
+			conn, err := c.ConnectionString(t.Context())
+			if err != nil {
+				t.Error(err)
+			}
+			cfg := clickhouse.ClickConfig{
+				URI:        conn,
+				Tables:     tables,
+				DropTables: true,
+			}
+			dbs, err := clickhouse.NewClickDB(&cfg)
+			if err != nil {
+				t.Error(err)
+			}
+			db[i] = dbs
+		case "pebble":
+			homeDestination := filepath.Join(home, path)
+			dbs, err := pebble.NewPebbleDB(pebble.DefaultPebbleConfig(homeDestination, tables))
+			if err != nil {
+				t.Error(err)
+			}
+			db[i] = dbs
+		case "level":
+			homeDestination := filepath.Join(home, path)
+			dbs, err := leveldb.NewLevelDB(leveldb.DefaultLevelDBConfig(homeDestination, tables))
+			if err != nil {
+				t.Error(err)
+			}
+			db[i] = dbs
+		case "multi":
+			tm := make(map[string]string, len(tables))
+			for j, tb := range tables {
+				if j%2 == 0 {
+					tm[tb] = multi.TypeLevelDB
+					continue
+				}
+				tm[tb] = multi.TypePebbleDB
+			}
+			homeDestination := filepath.Join(home, path)
+			cfg := multi.DefaultMultiConfig(homeDestination, tm)
+			dbs, err := multi.NewMultiDB(cfg)
+			if err != nil {
+				t.Error(err)
+			}
+			db[i] = dbs
+		default:
+			t.Errorf("unsupported db type: %s", dbt)
 		}
-		cfg := clickhouse.ClickConfig{
-			URI:        conn,
-			Tables:     tables,
-			DropTables: true,
-		}
-		dbs, err := clickhouse.NewClickDB(&cfg)
-		if err != nil {
-			panic(err)
-		}
-		dbDestination = dbs
-	default:
-		homeDestination := filepath.Join(home, "destination")
-		dbs, err := leveldb.NewLevelDB(leveldb.DefaultLevelDBConfig(homeDestination, tables))
-		if err != nil {
-			t.Fatal(err)
-		}
-		dbDestination = dbs
-	}
-
-	// Create source database
-	var dbSource larry.Database
-	switch srcType {
-	case "clickhouse":
-		panic("not yet source clickhouse")
-	default:
-		homeSource := filepath.Join(home, "source")
-		dbs, err := leveldb.NewLevelDB(leveldb.DefaultLevelDBConfig(homeSource, tables))
-		if err != nil {
-			panic(err)
-		}
-		dbSource = dbs
 	}
 
 	// Create replicator database
 	homeJournal := filepath.Join(home, "journal")
 	rcfg := DefaultReplicatorConfig(homeJournal, policy)
-	db, err := NewReplicatorDB(rcfg, dbSource, dbDestination)
+	rdb, err := NewReplicatorDB(rcfg, db[0], db[1])
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return db, dbDestination
+	return rdb, db[1]
 }
 
 func generateKV(n int) ([]byte, []byte) {
@@ -269,34 +288,40 @@ func TestReplicateAll(t *testing.T) {
 		source      string
 		destination string
 	}
-	tests := []testTableItem{
-		{
-			name:        "Direct",
-			policy:      Direct,
-			source:      "level",
-			destination: "level",
-		},
-		{
-			name:        "Lazy",
-			policy:      Lazy,
-			source:      "level",
-			destination: "level",
-		},
-		{
-			name:        "Distributed",
-			policy:      Lazy,
-			source:      "level",
-			destination: "clickhouse",
-		},
+
+	dbtypes := []string{"level", "pebble", "multi", "clickhouse"}
+	tests := make([]testTableItem, 0, len(dbtypes)*len(dbtypes)*2)
+
+	var count int
+	for _, policy := range []Policy{Direct, Lazy} {
+		for _, source := range dbtypes {
+			for _, destination := range dbtypes {
+				var pl string
+				switch policy {
+				case Lazy:
+					pl = "lazy"
+				default:
+					pl = "direct"
+				}
+				tests = append(tests, testTableItem{
+					name:        fmt.Sprintf("%s_%s_%s", source, destination, pl),
+					policy:      policy,
+					source:      source,
+					destination: destination,
+				})
+				count++
+			}
+		}
 	}
+
 	for _, tti := range tests {
 		t.Run(tti.name, func(t *testing.T) {
-			if tti.destination == "level" {
+			if tti.destination != "clickhouse" {
 				t.Parallel()
 			}
 			home := t.TempDir()
 			tables := []string{"table1", "table2"}
-			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 			defer cancel()
 
 			// First create source and destination

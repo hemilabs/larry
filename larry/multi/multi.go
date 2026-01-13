@@ -42,13 +42,15 @@ import (
 
 	"github.com/hemilabs/larry/larry"
 	"github.com/hemilabs/larry/larry/leveldb"
+	"github.com/hemilabs/larry/larry/pebble"
 )
 
 const (
 	logLevel = "INFO"
 	dbname   = ""
 
-	TypeLevelDB = "leveldb"
+	TypeLevelDB  = "leveldb"
+	TypePebbleDB = "pebble"
 )
 
 var log = loggo.GetLogger("multi")
@@ -107,6 +109,9 @@ func (b *multiDB) openDB(ctx context.Context, db, name string) error {
 	case TypeLevelDB:
 		cfg := leveldb.DefaultLevelDBConfig(bhs, []string{dbname})
 		bhsDB, err = leveldb.NewLevelDB(cfg)
+	case TypePebbleDB:
+		cfg := pebble.DefaultPebbleConfig(bhs, []string{dbname})
+		bhsDB, err = pebble.NewPebbleDB(cfg)
 	default:
 		err = fmt.Errorf("unsupported db type: %v", db)
 	}

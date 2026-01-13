@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	zookeeperImage  = "zookeeper:3.9@sha256sha256:b87f5ea0cdc73d71c74875277ca2e862f7abb3c0bfa365bd818db71eef870917"
+	zookeeperImage  = "zookeeper:3.9@sha256:b87f5ea0cdc73d71c74875277ca2e862f7abb3c0bfa365bd818db71eef870917"
 	clickhouseImage = "clickhouse/clickhouse-server:25.12-alpine@sha256:74da41cd61db84f652c6364fd30d59e19b7276d34f7c82515f5f0e70d6f325da"
 )
 
