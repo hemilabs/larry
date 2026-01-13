@@ -4,6 +4,21 @@
 
 // Package replicator implements a replicator, used to replay and
 // translate operations performed in a Larry database, to another.
+//
+// Typical use is as follows:
+//
+// ```
+//
+//	dbSource, _ := leveldb.NewLevelDB(cfg)
+//	dbDestination, _ := leveldb.NewLevelDB(cfg)
+//	rcfg := DefaultReplicatorConfig(journalHome, Direct)
+//	db, _ := NewReplicatorDB(rcfg, db1, db2)
+//	if err := db.Open(ctx); err != nil {
+//		return error
+//	}
+//	err := db.Put(ctx, "table1", key, value)
+//
+// ```
 package replicator
 
 import (
@@ -233,7 +248,7 @@ func (b *replicatorDB) replayJournal(ctx context.Context, key []byte, value []by
 	defer func() { jb.Reset(ctx) }()
 
 	decoder := kbin.NewDecoder(bytes.NewBuffer(value))
-	for i := 0; ; i++ {
+	for {
 		jop := larry.Operation{}
 		err := decoder.Decode(&jop)
 		if err != nil {
