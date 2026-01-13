@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Hemi Labs, Inc.
+// Copyright (c) 2025-2026 Hemi Labs, Inc.
 // Use of this source code is governed by the MIT License,
 // which can be found in the LICENSE file.
 
@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 
 	"github.com/juju/loggo"
@@ -35,6 +36,10 @@ func init() {
 
 type SinkUnavailableError struct {
 	e error
+}
+
+func (sue SinkUnavailableError) Unwrap() error {
+	return sue.e
 }
 
 func (sue SinkUnavailableError) Error() string {
@@ -435,27 +440,17 @@ func (b *replicatorDB) Close(ctx context.Context) error {
 	b.closeSink()
 	b.wg.Wait()
 
-	var errs []error
-	err := b.source.Close(ctx)
-	if err != nil {
-		errs = append(errs, fmt.Errorf("source: %w", err))
+	var errs error
+	if err := b.source.Close(ctx); err != nil {
+		errs = errors.Join(errs, fmt.Errorf("source: %w", err))
 	}
-	err = b.sink.Close(ctx)
-	if err != nil {
-		errs = append(errs, fmt.Errorf("sink: %w", err))
+	if err := b.sink.Close(ctx); err != nil {
+		errs = errors.Join(errs, fmt.Errorf("sink: %w", err))
 	}
-	err = b.jdb.Close(ctx)
-	if err != nil {
-		errs = append(errs, fmt.Errorf("journal: %w", err))
+	if err := b.jdb.Close(ctx); err != nil {
+		errs = errors.Join(errs, fmt.Errorf("journal: %w", err))
 	}
-	return errors.Join(errs...)
-}
-
-func copySlice(value []byte) []byte {
-	if value != nil {
-		return append([]byte{}, value...)
-	}
-	return nil
+	return errs
 }
 
 func (b *replicatorDB) directAccess(ctx context.Context, callback func(context.Context) (*journal, error)) error {
@@ -635,7 +630,7 @@ func (tx *replicatorTX) Del(ctx context.Context, table string, key []byte) error
 	tx.ops.PushBack(&larry.Operation{
 		Op:    larry.OpDel,
 		Table: table,
-		Key:   copySlice(key),
+		Key:   slices.Clone(key),
 		Value: nil,
 	})
 	return nil
@@ -659,8 +654,8 @@ func (tx *replicatorTX) Put(ctx context.Context, table string, key []byte, value
 	tx.ops.PushBack(&larry.Operation{
 		Op:    larry.OpPut,
 		Table: table,
-		Key:   copySlice(key),
-		Value: copySlice(value),
+		Key:   slices.Clone(key),
+		Value: slices.Clone(value),
 	})
 	return nil
 }
@@ -783,7 +778,7 @@ func (rb *replicatorBatch) Del(ctx context.Context, table string, key []byte) {
 	rb.ops.PushBack(&larry.Operation{
 		Op:    larry.OpDel,
 		Table: table,
-		Key:   copySlice(key),
+		Key:   slices.Clone(key),
 		Value: nil,
 	})
 }
@@ -793,8 +788,8 @@ func (rb *replicatorBatch) Put(ctx context.Context, table string, key, value []b
 	rb.ops.PushBack(&larry.Operation{
 		Op:    larry.OpPut,
 		Table: table,
-		Key:   copySlice(key),
-		Value: copySlice(value),
+		Key:   slices.Clone(key),
+		Value: slices.Clone(value),
 	})
 }
 

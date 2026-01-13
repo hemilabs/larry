@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Hemi Labs, Inc.
+// Copyright (c) 2025-2026 Hemi Labs, Inc.
 // Use of this source code is governed by the MIT License,
 // which can be found in the LICENSE file.
 
@@ -19,8 +19,13 @@ import (
 	_ "embed"
 )
 
+const (
+	zookeeperImage  = "zookeeper:3.9@sha256sha256:b87f5ea0cdc73d71c74875277ca2e862f7abb3c0bfa365bd818db71eef870917"
+	clickhouseImage = "clickhouse/clickhouse-server:25.12-alpine@sha256:74da41cd61db84f652c6364fd30d59e19b7276d34f7c82515f5f0e70d6f325da"
+)
+
 //go:embed testdata/config.xml
-var config []byte
+var clickhouseConfig []byte
 
 func CreateClickContainer(ctx context.Context, t *testing.T) (*cont.ClickHouseContainer, error) {
 	t.Helper()
@@ -33,13 +38,13 @@ func CreateClickContainer(ctx context.Context, t *testing.T) (*cont.ClickHouseCo
 		return nil, err
 	}
 	defer f.Close()
-	_, err = f.Write(config)
+	_, err = f.Write(clickhouseConfig)
 	if err != nil {
 		return nil, err
 	}
 
 	zkPort := nat.Port("2181/tcp")
-	zkcontainer, err := testcontainers.Run(ctx, "zookeeper:3.7",
+	zkcontainer, err := testcontainers.Run(ctx, zookeeperImage,
 		testcontainers.WithExposedPorts(zkPort.Port()),
 		testcontainers.WithWaitStrategy(wait.ForListeningPort(zkPort)),
 	)
@@ -49,14 +54,14 @@ func CreateClickContainer(ctx context.Context, t *testing.T) (*cont.ClickHouseCo
 	ipaddr, err := zkcontainer.ContainerIP(ctx)
 	require.NoError(t, err)
 	c, err := cont.Run(ctx,
-		"clickhouse/clickhouse-server:25.10-alpine",
+		clickhouseImage,
 		cont.WithConfigFile(filepath.Join(td, "config.xml")),
 		cont.WithZookeeper(ipaddr, zkPort.Port()),
 	)
 	testcontainers.CleanupContainer(t, c)
 	require.NoError(t, err)
 
-	err = c.CopyToContainer(ctx, config, "/etc/clickhouse-server/config.d/config.xml", 777)
+	err = c.CopyToContainer(ctx, clickhouseConfig, "/etc/clickhouse-server/config.d/config.xml", 777)
 	if err != nil {
 		return nil, err
 	}
