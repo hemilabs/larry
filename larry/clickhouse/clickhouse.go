@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Hemi Labs, Inc.
+// Copyright (c) 2025-2026 Hemi Labs, Inc.
 // Use of this source code is governed by the MIT License,
 // which can be found in the LICENSE file.
 
@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -463,9 +464,11 @@ func (tx *clickTX) Write(ctx context.Context, b larry.Batch) error {
 				if len(delKeys) >= maxBatchDelKeys || pair == nil {
 					start := time.Now()
 					var plug string
+					var plugSb466 strings.Builder
 					for j := range delKeys {
-						plug += fmt.Sprintf("$%d, ", j+1)
+						plugSb466.WriteString(fmt.Sprintf("$%d, ", j+1))
 					}
+					plug += plugSb466.String()
 					stmt := fmt.Sprintf(`DELETE FROM %s WHERE key IN (%s) SETTINGS 
 					lightweight_delete_mode = 'lightweight_update', 
 					lightweight_deletes_sync = 0`, op.table, plug)

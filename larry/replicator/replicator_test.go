@@ -1,0 +1,572 @@
+// Copyright (c) 2025-2026 Hemi Labs, Inc.
+// Use of this source code is governed by the MIT License,
+// which can be found in the LICENSE file.
+
+package replicator
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/davecgh/go-spew/spew"
+	"github.com/kelindar/binary"
+
+	"github.com/hemilabs/larry/internal/testutil"
+	"github.com/hemilabs/larry/larry"
+	"github.com/hemilabs/larry/larry/clickhouse"
+	"github.com/hemilabs/larry/larry/leveldb"
+	"github.com/hemilabs/larry/larry/multi"
+	"github.com/hemilabs/larry/larry/pebble"
+)
+
+func TestJournalEncoding(t *testing.T) {
+	t.Parallel()
+	jop := &larry.Operation{
+		Op:    larry.OpDel,
+		Table: "table",
+		Key:   []byte("key"),
+		Value: []byte("value"),
+	}
+	e, err := binary.Marshal(jop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d larry.Operation
+	err = binary.Unmarshal(e, &d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(*jop, d) {
+		t.Fatal("not equal")
+	}
+}
+
+func TestJournalStream(t *testing.T) {
+	t.Parallel()
+	maxItems := 199
+
+	var b bytes.Buffer
+	encoder := binary.NewEncoder(&b)
+	for i := range maxItems {
+		err := encoder.Encode(&larry.Operation{
+			Op:    larry.OpDel,
+			Table: "table",
+			Key:   []byte("key" + strconv.Itoa(i)),
+			Value: []byte("value" + strconv.Itoa(i)),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	d := binary.NewDecoder(&b)
+	for i := 0; ; i++ {
+		jop := larry.Operation{} // Yes, always allocate
+		err := d.Decode(&jop)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if i != maxItems {
+					t.Fatalf("i != maxItems, %v != %v", i, maxItems)
+				}
+				break
+			}
+			t.Fatal(err)
+		}
+		jopExected := larry.Operation{
+			Op:    larry.OpDel,
+			Table: "table",
+			Key:   []byte("key" + strconv.Itoa(i)),
+			Value: []byte("value" + strconv.Itoa(i)),
+		}
+		if !reflect.DeepEqual(jopExected, jop) {
+			t.Fatal("not equal")
+		}
+	}
+}
+
+func tableCount(ctx context.Context, db larry.Database, table string) (int, error) {
+	it, err := db.NewIterator(ctx, table)
+	if err != nil {
+		return 0, err
+	}
+	i := 0
+	for it.Next(ctx) {
+		i++
+	}
+	it.Close(ctx)
+	return i, nil
+}
+
+func tableDel(ctx context.Context, db larry.Database, table string, batchCount int) (int, error) {
+	it, err := db.NewIterator(ctx, table)
+	if err != nil {
+		return 0, err
+	}
+	bat, err := db.NewBatch(ctx)
+	if err != nil {
+		return 0, errors.New("new batch: err")
+	}
+	i := 0
+	for it.Next(ctx) {
+		if i < batchCount {
+			bat.Del(ctx, table, it.Key(ctx))
+		} else {
+			err := db.Del(ctx, table, it.Key(ctx))
+			if err != nil {
+				return 0, fmt.Errorf("del %v: %w", i, err)
+			}
+		}
+		i++
+	}
+	it.Close(ctx)
+	err = db.Update(ctx, func(ctx context.Context, tx larry.Transaction) error {
+		return tx.Write(ctx, bat)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("commit batch: %w", err)
+	}
+	return i, nil
+}
+
+func tablePut(ctx context.Context, db larry.Database, table string, offset, batchCount, putCount int) error {
+	bat, err := db.NewBatch(ctx)
+	if err != nil {
+		return errors.New("new batch: err")
+	}
+	for i := range batchCount {
+		key, value := generateKV(i + offset)
+		bat.Put(ctx, table, key, value)
+	}
+	for i := range putCount {
+		key, value := generateKV(i + batchCount + offset)
+		err := db.Put(ctx, table, key, value)
+		if err != nil {
+			return fmt.Errorf("put %v: %w", i, err)
+		}
+	}
+	err = db.Update(ctx, func(ctx context.Context, tx larry.Transaction) error {
+		return tx.Write(ctx, bat)
+	})
+	if err != nil {
+		return fmt.Errorf("commit batch: %w", err)
+	}
+	return nil
+}
+
+func createReplicator(t *testing.T, policy Policy, home, srcType, dstType string, tables []string) (larry.Database, larry.Database) {
+	// Create destination database
+	db := make([]larry.Database, 2)
+	for i, dbt := range []string{srcType, dstType} {
+		path := "source"
+		if i != 0 {
+			path = "destination"
+		}
+		switch dbt {
+		case "clickhouse":
+			c, err := testutil.CreateClickContainer(t.Context(), t)
+			if err != nil {
+				t.Error(err)
+			}
+			conn, err := c.ConnectionString(t.Context())
+			if err != nil {
+				t.Error(err)
+			}
+			cfg := clickhouse.ClickConfig{
+				URI:        conn,
+				Tables:     tables,
+				DropTables: true,
+			}
+			dbs, err := clickhouse.NewClickDB(&cfg)
+			if err != nil {
+				t.Error(err)
+			}
+			db[i] = dbs
+		case "pebble":
+			homeDestination := filepath.Join(home, path)
+			dbs, err := pebble.NewPebbleDB(pebble.DefaultPebbleConfig(homeDestination, tables))
+			if err != nil {
+				t.Error(err)
+			}
+			db[i] = dbs
+		case "level":
+			homeDestination := filepath.Join(home, path)
+			dbs, err := leveldb.NewLevelDB(leveldb.DefaultLevelDBConfig(homeDestination, tables))
+			if err != nil {
+				t.Error(err)
+			}
+			db[i] = dbs
+		case "multi":
+			tm := make(map[string]string, len(tables))
+			for j, tb := range tables {
+				if j%2 == 0 {
+					tm[tb] = multi.TypeLevelDB
+					continue
+				}
+				tm[tb] = multi.TypePebbleDB
+			}
+			homeDestination := filepath.Join(home, path)
+			cfg := multi.DefaultMultiConfig(homeDestination, tm)
+			dbs, err := multi.NewMultiDB(cfg)
+			if err != nil {
+				t.Error(err)
+			}
+			db[i] = dbs
+		default:
+			t.Errorf("unsupported db type: %s", dbt)
+		}
+	}
+
+	// Create replicator database
+	homeJournal := filepath.Join(home, "journal")
+	rcfg := DefaultReplicatorConfig(homeJournal, policy)
+	rdb, err := NewReplicatorDB(rcfg, db[0], db[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return rdb, db[1]
+}
+
+func generateKV(n int) ([]byte, []byte) {
+	offset := 10000
+	k := fmt.Append([]byte{}, strconv.Itoa(n))
+	v := fmt.Append([]byte{}, strconv.Itoa(n+offset))
+	return k, v
+}
+
+const (
+	// n of records per table
+	maxPuts = 50
+
+	// n of batched (put / del) operations
+	batchCount = maxPuts - manualCount
+
+	// n of unbatched (put / del) operations
+	manualCount = maxPuts / 10
+)
+
+func TestReplicator(t *testing.T) {
+	t.Parallel()
+	dbFunc := func(home string, tables []string, _ map[string]string) larry.Database {
+		home1 := filepath.Join(home, "1")
+		cfg1 := leveldb.DefaultLevelDBConfig(home1, tables)
+		db1, err := leveldb.NewLevelDB(cfg1)
+		if err != nil {
+			panic(err)
+		}
+		home2 := filepath.Join(home, "2")
+		cfg2 := leveldb.DefaultLevelDBConfig(home2, tables)
+		db2, err := leveldb.NewLevelDB(cfg2)
+		if err != nil {
+			panic(err)
+		}
+		journalHome := filepath.Join(home, "journal")
+		rcfg := DefaultReplicatorConfig(journalHome, Direct)
+		db, err := NewReplicatorDB(rcfg, db1, db2)
+		if err != nil {
+			panic(err)
+		}
+		return db
+	}
+	testutil.RunLarryTests(t, dbFunc, false)
+}
+
+func TestReplicateAll(t *testing.T) {
+	t.Parallel()
+
+	type testTableItem struct {
+		name        string
+		policy      Policy
+		source      string
+		destination string
+	}
+
+	dbtypes := []string{"level", "pebble", "multi", "clickhouse"}
+	tests := make([]testTableItem, 0, len(dbtypes)*len(dbtypes)*2)
+
+	var count int
+	for _, policy := range []Policy{Direct, Lazy} {
+		for _, source := range dbtypes {
+			for _, destination := range dbtypes {
+				var pl string
+				switch policy {
+				case Lazy:
+					pl = "lazy"
+				default:
+					pl = "direct"
+				}
+				tests = append(tests, testTableItem{
+					name:        fmt.Sprintf("%s_%s_%s", source, destination, pl),
+					policy:      policy,
+					source:      source,
+					destination: destination,
+				})
+				count++
+			}
+		}
+	}
+
+	for _, tti := range tests {
+		t.Run(tti.name, func(t *testing.T) {
+			if tti.destination != "clickhouse" {
+				t.Parallel()
+			}
+			home := t.TempDir()
+			tables := []string{"table1", "table2"}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+			defer cancel()
+
+			// First create source and destination
+			db, dbDestination := createReplicator(t, tti.policy, home, tti.source, tti.destination, tables)
+
+			if err := db.Open(ctx); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := db.Close(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}()
+
+			// Individual Puts
+			recordsPerTable := make([]int, len(tables))
+			for k, table := range tables {
+				err := tablePut(ctx, db, table, 0, batchCount, manualCount)
+				if err != nil {
+					t.Fatal(err)
+				}
+				recordsPerTable[k] = maxPuts
+				t.Logf("%v: %v records inserted", table, maxPuts)
+			}
+			for !db.(*replicatorDB).flushed(ctx) {
+				time.Sleep(time.Millisecond)
+			}
+
+			// Verify that we have them in the replicator db (really the source)
+			// and in the destination db.
+			for _, table := range tables {
+				for i := range maxPuts {
+					key, expectedValue := generateKV(i)
+
+					// Get out of source
+					value, err := db.Get(ctx, table, key)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !bytes.Equal(expectedValue, value) {
+						t.Fatal("not equal")
+					}
+
+					// Now fish it out of destination.
+					dValue, err := dbDestination.Get(ctx, table, []byte(strconv.Itoa(i)))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !bytes.Equal(expectedValue, dValue) {
+						t.Fatal("not equal")
+					}
+				}
+				t.Logf("%v: %v records verified", table, maxPuts)
+			}
+
+			// Empty tables and verify deletes
+			for k, table := range tables {
+				// Iterate over table and assert it matches source
+				c, err := tableCount(ctx, dbDestination, table)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if c != recordsPerTable[k] {
+					t.Fatalf("%v: got %v wanted %v",
+						tables[k], c, recordsPerTable[k])
+				}
+				t.Logf("%v: pre-delete count of %d in src == dst", table, c)
+
+				// Empty table
+				x, err := tableDel(ctx, db, table, batchCount)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if x != recordsPerTable[k] {
+					t.Fatalf("%v: got %v wanted %v", table, x, recordsPerTable[k])
+				}
+				recordsPerTable[k] = 0
+				t.Logf("%v: %v record deleted", table, x)
+				for !db.(*replicatorDB).flushed(ctx) {
+					time.Sleep(time.Millisecond)
+				}
+
+				// Iterate over table and assert it matches source
+				for tb := range tables {
+					j, err := tableCount(ctx, dbDestination, tables[tb])
+					if err != nil {
+						t.Fatal(err)
+					}
+					if j != recordsPerTable[tb] {
+						t.Fatalf("%v: got %v wanted %v",
+							tables[tb], x, recordsPerTable[tb])
+					}
+					t.Logf("post-delete count of %d for %v in src == dst", recordsPerTable[tb], tables[tb])
+				}
+			}
+		})
+	}
+}
+
+func TestReplicateDirectBadTarget(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	tables := []string{"table1", "table2"}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	// First create source and destination
+	db, dbDestination := createReplicator(t, Direct, home, "level", "level", tables)
+
+	if err := db.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Close(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	// Force close target so that replication fails.
+	err := dbDestination.Close(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Put a value and expect failure
+	i := 1337
+	valueOffset := 10000
+	err = db.Put(ctx, tables[0], []byte(strconv.Itoa(i)),
+		[]byte(strconv.Itoa(i+valueOffset)))
+	if !errors.Is(err, ErrSinkUnavailable) {
+		t.Fatal(err)
+	}
+
+	// Now close everything and reopen replicator and the missed put must
+	// be replayed.
+	err = db.Close(ctx)
+	if !errors.Is(err, larry.ErrDBClosed) {
+		t.Fatal(err)
+	}
+
+	err = db.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// See if we replicated the missing key/val
+	value, err := dbDestination.Get(ctx, tables[0], []byte(strconv.Itoa(i)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(value, []byte(strconv.Itoa(i+valueOffset))) {
+		t.Fatal("not equal")
+	}
+
+	// Make sure journal is empty.
+	it, err := db.(*replicatorDB).jdb.NewRange(ctx, "", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for it.Next(ctx) {
+		if bytes.Equal(lastSequenceID, it.Key(ctx)) {
+			continue
+		}
+		t.Fatalf("found unflushed journal: %v", spew.Sdump(it.Key(ctx)))
+	}
+}
+
+func TestReplicateOnStartup(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	tables := []string{"table1", "table2"}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	// First create source and destination
+	db, dbDestination := createReplicator(t, Lazy, home, "level", "level", tables)
+
+	if err := db.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Close(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	// Close destination early to prevent replay
+	if err := dbDestination.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Individual Puts
+	maxPuts := 5
+	maxTxs := 10
+
+	// These all fail, but since no one listens for
+	// the error when using Lazy policy, it will
+	// keep adding new Txs and creating Journals.
+	for tx := range maxTxs {
+		for _, table := range tables {
+			err := tablePut(ctx, db, table, maxPuts*tx, maxPuts, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// Restart Replicator
+	if err := db.Close(ctx); err == nil {
+		t.Fatal("expected err")
+	}
+	if err := db.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Log("db restarted")
+
+	for !db.(*replicatorDB).flushed(ctx) {
+		time.Sleep(time.Millisecond)
+	}
+
+	// Verify that we have them in the replicator db (really the source)
+	// and in the destination db.
+	for _, table := range tables {
+		for i := range maxPuts * maxTxs {
+			key, expectedValue := generateKV(i)
+
+			// Get out of source
+			value, err := db.Get(ctx, table, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(expectedValue, value) {
+				t.Fatal("not equal")
+			}
+
+			// Now fish it out of destination.
+			dValue, err := dbDestination.Get(ctx, table, []byte(strconv.Itoa(i)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(expectedValue, dValue) {
+				t.Fatal("not equal")
+			}
+		}
+	}
+}
