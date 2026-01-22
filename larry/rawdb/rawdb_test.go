@@ -30,7 +30,7 @@ func testRawDB(t *testing.T, dbs string) {
 	}()
 
 	blockSize := int64(4096)
-	rdb, err := New(&Config{DB: dbs, Home: home, MaxSize: blockSize})
+	rdb, err := NewRawDB(&Config{DB: dbs, Home: home, MaxSize: blockSize})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func testRawDB(t *testing.T, dbs string) {
 
 	if dbs != "mongo" {
 		// Open again and expect locked failure
-		rdb2, err := New(&Config{DB: dbs, Home: home, MaxSize: blockSize})
+		rdb2, err := NewRawDB(&Config{DB: dbs, Home: home, MaxSize: blockSize})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -59,26 +59,26 @@ func testRawDB(t *testing.T, dbs string) {
 
 	key := []byte("key")
 	data := []byte("hello, world!")
-	err = rdb.Insert(ctx, key, data)
+	err = rdb.Put(ctx, DefaultTable, key, data)
 	if err != nil {
 		t.Fatalf("%T %v", err, err)
 	}
 	KEY := []byte("KEY")
 	DATA := []byte("HELLO, WORLD!")
-	err = rdb.Insert(ctx, KEY, DATA)
+	err = rdb.Put(ctx, DefaultTable, KEY, DATA)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Get data out again
-	dataRead, err := rdb.Get(ctx, key)
+	dataRead, err := rdb.Get(ctx, DefaultTable, key)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(data, dataRead) {
 		t.Fatal("data not identical")
 	}
-	dataRead, err = rdb.Get(ctx, KEY)
+	dataRead, err = rdb.Get(ctx, DefaultTable, KEY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,11 +96,11 @@ func testRawDB(t *testing.T, dbs string) {
 		overflowData[k] = uint8(k)
 	}
 	overflowKey := []byte("overflow")
-	err = rdb.Insert(ctx, overflowKey, overflowData)
+	err = rdb.Put(ctx, DefaultTable, overflowKey, overflowData)
 	if err != nil {
 		t.Fatal(err)
 	}
-	overflowRead, err := rdb.Get(ctx, overflowKey)
+	overflowRead, err := rdb.Get(ctx, DefaultTable, overflowKey)
 	if err != nil {
 		t.Fatal(err)
 	}
