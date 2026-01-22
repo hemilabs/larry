@@ -30,7 +30,10 @@ func testRawDB(t *testing.T, dbs string) {
 	}()
 
 	blockSize := int64(4096)
-	rdb, err := NewRawDB(&Config{DB: dbs, Home: home, MaxSize: blockSize})
+	rdb, err := NewRawDB(&Config{
+		DB: dbs, Home: home, MaxSize: blockSize,
+		Tables: []string{DefaultTable},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

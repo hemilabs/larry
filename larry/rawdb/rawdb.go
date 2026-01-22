@@ -18,6 +18,7 @@ import (
 
 	"github.com/hemilabs/larry/larry"
 	"github.com/hemilabs/larry/larry/leveldb"
+	"github.com/hemilabs/larry/larry/pebble"
 )
 
 const (
@@ -117,6 +118,10 @@ func (r *rawDB) Open(ctx context.Context) error {
 		lcfg := leveldb.DefaultLevelDBConfig(filepath.Join(r.cfg.Home, indexDir),
 			r.cfg.Tables)
 		r.index, err = leveldb.NewLevelDB(lcfg)
+	case TypePebble:
+		lcfg := pebble.DefaultPebbleConfig(filepath.Join(r.cfg.Home, indexDir),
+			r.cfg.Tables)
+		r.index, err = pebble.NewPebbleDB(lcfg)
 	default:
 	}
 	if err != nil {
@@ -158,7 +163,7 @@ func (r *rawDB) DB() larry.Database {
 	return r.index
 }
 
-func (b *rawDB) Del(_ context.Context, table string, key []byte) error {
+func (r *rawDB) Del(_ context.Context, _ string, _ []byte) error {
 	return larry.ErrNotSupported
 }
 
@@ -310,26 +315,26 @@ func (r *rawDB) Get(ctx context.Context, table string, key []byte) ([]byte, erro
 	return data, nil
 }
 
-func (b *rawDB) Begin(_ context.Context, _ bool) (larry.Transaction, error) {
+func (r *rawDB) Begin(_ context.Context, _ bool) (larry.Transaction, error) {
 	return nil, larry.ErrNotSupported
 }
 
-func (b *rawDB) View(_ context.Context, _ func(_ context.Context, _ larry.Transaction) error) error {
+func (r *rawDB) View(_ context.Context, _ func(_ context.Context, _ larry.Transaction) error) error {
 	return larry.ErrNotSupported
 }
 
-func (b *rawDB) Update(_ context.Context, _ func(ctx context.Context, _ larry.Transaction) error) error {
+func (r *rawDB) Update(_ context.Context, _ func(ctx context.Context, _ larry.Transaction) error) error {
 	return larry.ErrNotSupported
 }
 
-func (b *rawDB) NewIterator(_ context.Context, _ string) (larry.Iterator, error) {
+func (r *rawDB) NewIterator(_ context.Context, _ string) (larry.Iterator, error) {
 	return nil, larry.ErrNotSupported
 }
 
-func (b *rawDB) NewRange(_ context.Context, _ string, _, _ []byte) (larry.Range, error) {
+func (r *rawDB) NewRange(_ context.Context, _ string, _, _ []byte) (larry.Range, error) {
 	return nil, larry.ErrNotSupported
 }
 
-func (b *rawDB) NewBatch(_ context.Context) (larry.Batch, error) {
+func (r *rawDB) NewBatch(_ context.Context) (larry.Batch, error) {
 	return nil, larry.ErrNotSupported
 }
