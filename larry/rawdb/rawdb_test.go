@@ -10,9 +10,11 @@ import (
 	"math"
 	"os"
 	"testing"
+
+	"github.com/hemilabs/larry/internal/testutil"
 )
 
-func testRawDB(t *testing.T, dbs string) {
+func testRawDB(t *testing.T, dbs, remoteURI string) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -30,9 +32,13 @@ func testRawDB(t *testing.T, dbs string) {
 	}()
 
 	blockSize := int64(4096)
+	table := DefaultTable
+	if dbs == TypeClickhouse {
+		table = "rawdb"
+	}
 	rdb, err := NewRawDB(&Config{
-		DB: dbs, Home: home, MaxSize: blockSize,
-		Tables: []string{DefaultTable},
+		DB: dbs, Home: home, MaxSize: blockSize, RemoteURI: remoteURI,
+		Table: table,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -48,9 +54,11 @@ func testRawDB(t *testing.T, dbs string) {
 		}
 	}()
 
-	if dbs != "mongo" {
+	if dbs != TypeClickhouse {
 		// Open again and expect locked failure
-		rdb2, err := NewRawDB(&Config{DB: dbs, Home: home, MaxSize: blockSize})
+		rdb2, err := NewRawDB(
+			&Config{DB: dbs, Home: home, MaxSize: blockSize, RemoteURI: remoteURI,
+				Table: table})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -62,26 +70,26 @@ func testRawDB(t *testing.T, dbs string) {
 
 	key := []byte("key")
 	data := []byte("hello, world!")
-	err = rdb.Put(ctx, DefaultTable, key, data)
+	err = rdb.Put(ctx, table, key, data)
 	if err != nil {
 		t.Fatalf("%T %v", err, err)
 	}
 	KEY := []byte("KEY")
 	DATA := []byte("HELLO, WORLD!")
-	err = rdb.Put(ctx, DefaultTable, KEY, DATA)
+	err = rdb.Put(ctx, table, KEY, DATA)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Get data out again
-	dataRead, err := rdb.Get(ctx, DefaultTable, key)
+	dataRead, err := rdb.Get(ctx, table, key)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(data, dataRead) {
 		t.Fatal("data not identical")
 	}
-	dataRead, err = rdb.Get(ctx, DefaultTable, KEY)
+	dataRead, err = rdb.Get(ctx, table, KEY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,11 +107,11 @@ func testRawDB(t *testing.T, dbs string) {
 		overflowData[k] = uint8(k)
 	}
 	overflowKey := []byte("overflow")
-	err = rdb.Put(ctx, DefaultTable, overflowKey, overflowData)
+	err = rdb.Put(ctx, table, overflowKey, overflowData)
 	if err != nil {
 		t.Fatal(err)
 	}
-	overflowRead, err := rdb.Get(ctx, DefaultTable, overflowKey)
+	overflowRead, err := rdb.Get(ctx, table, overflowKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,21 +120,26 @@ func testRawDB(t *testing.T, dbs string) {
 	}
 }
 
+//nolint:paralleltest // distributed dbs use testcontainers
 func TestRawDBS(t *testing.T) {
-	t.Parallel()
-
-	dbs := []string{TypeLevelDB}
+	dbs := []string{TypeLevelDB, TypePebble, TypeClickhouse}
 	for _, v := range dbs {
-		log.Infof("testing: %v", v)
-		testRawDB(t, v)
+		t.Run(v, func(t *testing.T) {
+			var conn string
+			if v == TypeClickhouse {
+				c, err := testutil.CreateClickContainer(t.Context(), t)
+				if err != nil {
+					t.Error(err)
+				}
+				conn, err = c.ConnectionString(t.Context())
+				if err != nil {
+					t.Error(err)
+				}
+			} else {
+				t.Parallel()
+			}
+			log.Infof("testing: %v", v)
+			testRawDB(t, v, conn)
+		})
 	}
 }
-
-// TODO: uncomment when clickhouse is added
-// func TestRemoteDBS(t *testing.T) {
-// 	if os.Getenv("CLICKHOUSE_TEST_URI") == "" {
-// 		t.Logf("clickhouse env variable not set, skipping test")
-// 		t.Skip()
-// 	}
-// 	testRawDB(t, "mongo")
-// }

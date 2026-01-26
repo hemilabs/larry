@@ -2,6 +2,9 @@
 // Use of this source code is governed by the MIT License,
 // which can be found in the LICENSE file.
 
+// Package rawdb is an append-only, file-based key-value store for immutable
+// data. It uses Larry compliant databases to index metadata while storing
+// values in rolling disk files. No transactions or deletions are supported.
 package rawdb
 
 import (
@@ -17,6 +20,7 @@ import (
 	"github.com/juju/loggo"
 
 	"github.com/hemilabs/larry/larry"
+	"github.com/hemilabs/larry/larry/clickhouse"
 	"github.com/hemilabs/larry/larry/leveldb"
 	"github.com/hemilabs/larry/larry/pebble"
 )
@@ -30,8 +34,9 @@ const (
 
 	DefaultMaxFileSize = 256 * 1024 * 1024 // 256MB file max; will never be bigger.
 
-	TypeLevelDB = "leveldb"
-	TypePebble  = "pebble"
+	TypeLevelDB    = "leveldb"
+	TypePebble     = "pebble"
+	TypeClickhouse = "clickhouse"
 )
 
 var (
@@ -58,17 +63,23 @@ type rawDB struct {
 }
 
 type Config struct {
-	DB      string
-	Home    string
-	MaxSize int64
-	Tables  []string
+	DB        string
+	Home      string
+	RemoteURI string
+	Table     string
+	MaxSize   int64
 }
 
-func DefaultRawDBConfig(home string) *Config {
+// DefaultRawDBConfig will set an empty string as the indexing
+// table in order to minimize space used. Some indexing databases
+// may not allow this, and thus this parameter should be
+// manually changed if necessary.
+func DefaultRawDBConfig(home, remoteURI string) *Config {
 	return &Config{
-		Home:    home,
-		MaxSize: DefaultMaxFileSize,
-		Tables:  []string{DefaultTable},
+		Home:      home,
+		MaxSize:   DefaultMaxFileSize,
+		Table:     DefaultTable,
+		RemoteURI: remoteURI,
 	}
 }
 
@@ -84,10 +95,14 @@ func NewRawDB(cfg *Config) (larry.Database, error) {
 		return nil, fmt.Errorf("invalid max size: %v", cfg.MaxSize)
 	}
 
-	// TODO: add more dbs as they get added
 	switch cfg.DB {
 	case TypeLevelDB:
 	case TypePebble:
+	case TypeClickhouse:
+		if cfg.Table == "" {
+			return nil,
+				errors.New("clickhouse prevents empty strings as table names")
+		}
 	default:
 		return nil, fmt.Errorf("invalid db: %v", cfg.DB)
 	}
@@ -116,12 +131,16 @@ func (r *rawDB) Open(ctx context.Context) error {
 	switch r.cfg.DB {
 	case TypeLevelDB:
 		lcfg := leveldb.DefaultLevelDBConfig(filepath.Join(r.cfg.Home, indexDir),
-			r.cfg.Tables)
+			[]string{r.cfg.Table})
 		r.index, err = leveldb.NewLevelDB(lcfg)
 	case TypePebble:
 		lcfg := pebble.DefaultPebbleConfig(filepath.Join(r.cfg.Home, indexDir),
-			r.cfg.Tables)
+			[]string{r.cfg.Table})
 		r.index, err = pebble.NewPebbleDB(lcfg)
+	case TypeClickhouse:
+		lcfg := clickhouse.DefaultClickConfig(r.cfg.RemoteURI,
+			[]string{r.cfg.Table})
+		r.index, err = clickhouse.NewClickDB(lcfg)
 	default:
 	}
 	if err != nil {
