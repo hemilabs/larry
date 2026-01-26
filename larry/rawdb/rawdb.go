@@ -51,9 +51,9 @@ func init() {
 }
 
 // Assert required interfaces
-var _ larry.Database = (*rawDB)(nil)
+var _ larry.Database = (*RawDB)(nil)
 
-type rawDB struct {
+type RawDB struct {
 	mtx sync.RWMutex
 
 	cfg *Config
@@ -107,12 +107,12 @@ func NewRawDB(cfg *Config) (larry.Database, error) {
 		return nil, fmt.Errorf("invalid db: %v", cfg.DB)
 	}
 
-	return &rawDB{
+	return &RawDB{
 		cfg: cfg,
 	}, nil
 }
 
-func (r *rawDB) Open(ctx context.Context) error {
+func (r *RawDB) Open(ctx context.Context) error {
 	log.Tracef("Open")
 	defer log.Tracef("Open exit")
 
@@ -156,7 +156,7 @@ func (r *rawDB) Open(ctx context.Context) error {
 	return nil
 }
 
-func (r *rawDB) Close(ctx context.Context) error {
+func (r *RawDB) Close(ctx context.Context) error {
 	log.Tracef("Close")
 	defer log.Tracef("Close exit")
 
@@ -178,22 +178,22 @@ func (r *rawDB) Close(ctx context.Context) error {
 // DB returns the underlying index database.
 // You should probably not be calling this! It is used for external database
 // upgrades.
-func (r *rawDB) DB() larry.Database {
+func (r *RawDB) DB() larry.Database {
 	return r.index
 }
 
-func (r *rawDB) Del(_ context.Context, _ string, _ []byte) error {
+func (r *RawDB) Del(_ context.Context, _ string, _ []byte) error {
 	return larry.ErrNotSupported
 }
 
-func (r *rawDB) Has(ctx context.Context, table string, key []byte) (bool, error) {
+func (r *RawDB) Has(ctx context.Context, table string, key []byte) (bool, error) {
 	log.Tracef("Has")
 	defer log.Tracef("Has exit")
 
 	return r.index.Has(ctx, table, key)
 }
 
-func (r *rawDB) Put(ctx context.Context, table string, key, value []byte) error {
+func (r *RawDB) Put(ctx context.Context, table string, key, value []byte) error {
 	log.Tracef("Put")
 	defer log.Tracef("Put exit")
 
@@ -295,7 +295,7 @@ func (r *rawDB) Put(ctx context.Context, table string, key, value []byte) error 
 	}
 }
 
-func (r *rawDB) Get(ctx context.Context, table string, key []byte) ([]byte, error) {
+func (r *RawDB) Get(ctx context.Context, table string, key []byte) ([]byte, error) {
 	log.Tracef("Get: %x", key)
 	defer log.Tracef("Get exit: %x", key)
 
@@ -334,26 +334,26 @@ func (r *rawDB) Get(ctx context.Context, table string, key []byte) ([]byte, erro
 	return data, nil
 }
 
-func (r *rawDB) Begin(_ context.Context, _ bool) (larry.Transaction, error) {
+func (r *RawDB) Begin(_ context.Context, _ bool) (larry.Transaction, error) {
 	return nil, larry.ErrNotSupported
 }
 
-func (r *rawDB) View(_ context.Context, _ func(_ context.Context, _ larry.Transaction) error) error {
+func (r *RawDB) View(_ context.Context, _ func(_ context.Context, _ larry.Transaction) error) error {
 	return larry.ErrNotSupported
 }
 
-func (r *rawDB) Update(_ context.Context, _ func(ctx context.Context, _ larry.Transaction) error) error {
+func (r *RawDB) Update(_ context.Context, _ func(ctx context.Context, _ larry.Transaction) error) error {
 	return larry.ErrNotSupported
 }
 
-func (r *rawDB) NewIterator(_ context.Context, _ string) (larry.Iterator, error) {
+func (r *RawDB) NewIterator(_ context.Context, _ string) (larry.Iterator, error) {
 	return nil, larry.ErrNotSupported
 }
 
-func (r *rawDB) NewRange(_ context.Context, _ string, _, _ []byte) (larry.Range, error) {
+func (r *RawDB) NewRange(_ context.Context, _ string, _, _ []byte) (larry.Range, error) {
 	return nil, larry.ErrNotSupported
 }
 
-func (r *rawDB) NewBatch(_ context.Context) (larry.Batch, error) {
+func (r *RawDB) NewBatch(_ context.Context) (larry.Batch, error) {
 	return nil, larry.ErrNotSupported
 }
