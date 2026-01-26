@@ -57,8 +57,10 @@ func testRawDB(t *testing.T, dbs, remoteURI string) {
 	if dbs != TypeClickhouse {
 		// Open again and expect locked failure
 		rdb2, err := NewRawDB(
-			&Config{DB: dbs, Home: home, MaxSize: blockSize, RemoteURI: remoteURI,
-				Table: table})
+			&Config{
+				DB: dbs, Home: home, MaxSize: blockSize, RemoteURI: remoteURI,
+				Table: table,
+			})
 		if err != nil {
 			t.Fatal(err)
 		}
