@@ -5,7 +5,6 @@
 package multi
 
 import (
-	"context"
 	"testing"
 
 	"github.com/hemilabs/larry/internal/testutil"
@@ -25,6 +24,19 @@ var dbFunc = func(home string, tables []string, _ map[string]string) larry.Datab
 	return db
 }
 
+var rawDBFunc = func(home string, tables []string, _ map[string]string) larry.Database {
+	tm := make(map[string]string, len(tables))
+	for _, t := range tables {
+		tm[t] = TypeRawDB
+	}
+	cfg := DefaultMultiConfig(home, tm)
+	db, err := NewMultiDB(cfg)
+	if err != nil {
+		panic(err)
+	}
+	return db
+}
+
 func TestMultiDB(t *testing.T) {
 	t.Parallel()
 	testutil.RunLarryTests(t, dbFunc, false)
@@ -32,24 +44,7 @@ func TestMultiDB(t *testing.T) {
 
 func TestMultiRawDB(t *testing.T) {
 	t.Parallel()
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	table := "testtable"
-	tables := map[string]string{table: TypeRawDB}
-	cfg := DefaultMultiConfig(t.TempDir(), tables)
-	rdb, err := NewMultiDB(cfg)
-	if err != nil {
-		panic(err)
-	}
-	if err := rdb.Open(ctx); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := testutil.RunRawDBTests(ctx, rdb, table); err != nil {
-		t.Fatal(err)
-	}
+	testutil.RunRawDBTests(t, rawDBFunc, false)
 }
 
 func BenchmarkMultiDB(b *testing.B) {

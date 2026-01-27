@@ -5,77 +5,14 @@
 package rawdb
 
 import (
-	"context"
-	"os"
 	"testing"
 
 	"github.com/hemilabs/larry/internal/testutil"
+	"github.com/hemilabs/larry/larry"
 )
 
-func testRawDB(t *testing.T, dbs, remoteURI string) {
-	blockSize := int64(4096)
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	home := t.TempDir()
-	remove := true
-	defer func() {
-		if !remove {
-			t.Logf("did not remove home: %v", home)
-			return
-		}
-
-		if err := os.RemoveAll(home); err != nil {
-			panic(err)
-		}
-	}()
-
-	table := DefaultTable
-	if dbs == TypeClickhouse {
-		table = "rawdb"
-	}
-	rdb, err := NewRawDB(&Config{
-		DB: dbs, Home: home, MaxSize: blockSize, RemoteURI: remoteURI,
-		Table: table,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = rdb.Open(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		err := rdb.Close(ctx)
-		if err != nil {
-			panic(err)
-		}
-	}()
-
-	if dbs != TypeClickhouse {
-		// Open again and expect locked failure
-		rdb2, err := NewRawDB(
-			&Config{
-				DB: dbs, Home: home, MaxSize: blockSize, RemoteURI: remoteURI,
-				Table: table,
-			})
-		if err != nil {
-			t.Fatal(err)
-		}
-		err = rdb2.Open(ctx)
-		if err == nil {
-			t.Fatal("expected locked db")
-		}
-	}
-
-	if err := testutil.RunRawDBTests(ctx, rdb, table); err != nil {
-		t.Fatal(err)
-	}
-}
-
-//nolint:paralleltest // distributed dbs use testcontainers
-func TestRawDBS(t *testing.T) {
+func TestRawDB(t *testing.T) {
+	t.Parallel()
 	dbs := []string{TypeLevelDB, TypePebbleDB, TypeClickhouse}
 	for _, v := range dbs {
 		t.Run(v, func(t *testing.T) {
@@ -89,10 +26,18 @@ func TestRawDBS(t *testing.T) {
 				if err != nil {
 					t.Error(err)
 				}
-			} else {
-				t.Parallel()
 			}
-			testRawDB(t, v, conn)
+			dbFunc := func(home string, tables []string, _ map[string]string) larry.Database {
+				rdb, err := NewRawDB(&Config{
+					DB: v, Home: home, MaxSize: testutil.RawDBTestBlockSize,
+					RemoteURI: conn, Table: tables[0],
+				})
+				if err != nil {
+					panic(err)
+				}
+				return rdb
+			}
+			testutil.RunRawDBTests(t, dbFunc, conn != "")
 		})
 	}
 }
