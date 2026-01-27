@@ -35,7 +35,7 @@ const (
 	DefaultMaxFileSize = 256 * 1024 * 1024 // 256MB file max; will never be bigger.
 
 	TypeLevelDB    = "leveldb"
-	TypePebble     = "pebble"
+	TypePebbleDB   = "pebble"
 	TypeClickhouse = "clickhouse"
 )
 
@@ -80,6 +80,7 @@ func DefaultRawDBConfig(home, remoteURI string) *Config {
 		MaxSize:   DefaultMaxFileSize,
 		Table:     DefaultTable,
 		RemoteURI: remoteURI,
+		DB:        TypeLevelDB,
 	}
 }
 
@@ -97,7 +98,7 @@ func NewRawDB(cfg *Config) (larry.Database, error) {
 
 	switch cfg.DB {
 	case TypeLevelDB:
-	case TypePebble:
+	case TypePebbleDB:
 	case TypeClickhouse:
 		if cfg.Table == "" {
 			return nil,
@@ -133,7 +134,7 @@ func (r *RawDB) Open(ctx context.Context) error {
 		lcfg := leveldb.DefaultLevelDBConfig(filepath.Join(r.cfg.Home, indexDir),
 			[]string{r.cfg.Table})
 		r.index, err = leveldb.NewLevelDB(lcfg)
-	case TypePebble:
+	case TypePebbleDB:
 		lcfg := pebble.DefaultPebbleConfig(filepath.Join(r.cfg.Home, indexDir),
 			[]string{r.cfg.Table})
 		r.index, err = pebble.NewPebbleDB(lcfg)

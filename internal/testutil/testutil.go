@@ -1542,6 +1542,94 @@ func benchmarkLarryGet(ctx context.Context, b *testing.B, dbFunc NewDBFunc) {
 	}
 }
 
+func RunRawDBTests(ctx context.Context, rdb larry.Database, table string) error {
+	blockSize := int64(4096)
+
+	// Negative checks
+	_, err := rdb.Get(ctx, table, []byte("test"))
+	if !errors.Is(err, larry.ErrKeyNotFound) {
+		return fmt.Errorf("expected err %w, got %w", larry.ErrKeyNotFound, err)
+	}
+
+	has, err := rdb.Has(ctx, table, []byte("test"))
+	if err != nil {
+		return fmt.Errorf("%T %w", err, err)
+	}
+	if has {
+		return errors.New("has: expected key not found")
+	}
+
+	// Positive Checks
+	key := []byte("key")
+	data := []byte("hello, world!")
+	err = rdb.Put(ctx, table, key, data)
+	if err != nil {
+		return fmt.Errorf("%T %w", err, err)
+	}
+	KEY := []byte("KEY")
+	DATA := []byte("HELLO, WORLD!")
+	err = rdb.Put(ctx, table, KEY, DATA)
+	if err != nil {
+		return err
+	}
+
+	// Get data out again
+	dataRead, err := rdb.Get(ctx, table, key)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(data, dataRead) {
+		return errors.New("data not identical")
+	}
+
+	has, err = rdb.Has(ctx, table, key)
+	if err != nil {
+		return fmt.Errorf("%T %w", err, err)
+	}
+	if !has {
+		return fmt.Errorf("key not found: %v", key)
+	}
+
+	dataRead, err = rdb.Get(ctx, table, KEY)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(DATA, dataRead) {
+		return errors.New("data not identical")
+	}
+
+	has, err = rdb.Has(ctx, table, KEY)
+	if err != nil {
+		return fmt.Errorf("%T %w", err, err)
+	}
+	if !has {
+		return fmt.Errorf("key not found: %v", KEY)
+	}
+
+	// Overflow to next file
+	overflowData := make([]byte, int(blockSize)-len(data)-len(DATA)+1)
+	for k := range overflowData {
+		k = k % (math.MaxUint8 + 1)
+		if k < 0 || k > math.MaxUint8 {
+			return fmt.Errorf("uint8 overflow: %v", k)
+		}
+		overflowData[k] = uint8(k)
+	}
+	overflowKey := []byte("overflow")
+	err = rdb.Put(ctx, table, overflowKey, overflowData)
+	if err != nil {
+		return err
+	}
+	overflowRead, err := rdb.Get(ctx, table, overflowKey)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(overflowData, overflowRead) {
+		return errors.New("overflow data not identical")
+	}
+	return nil
+}
+
 // TODO extra tests
 // iterator / range concurrent put / del (for reverse reliant iters)
 // iterator / range no keys
