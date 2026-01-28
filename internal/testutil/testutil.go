@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Hemi Labs, Inc.
+// Copyright (c) 2025-2026 Hemi Labs, Inc.
 // Use of this source code is governed by the MIT License,
 // which can be found in the LICENSE file.
 
@@ -1540,6 +1540,183 @@ func benchmarkLarryGet(ctx context.Context, b *testing.B, dbFunc NewDBFunc) {
 			}
 		})
 	}
+}
+
+var RawDBTestBlockSize = int64(4096)
+
+func RunRawDBTests(t *testing.T, dbFunc NewDBFunc, distributed bool) {
+	ctx := t.Context()
+	const insertCount = 10
+	t.Run("basic", func(t *testing.T) {
+		if !distributed {
+			t.Parallel()
+		}
+
+		db, tables := prepareTestSuite(ctx, t, 1, 0, dbFunc, nil)
+		defer func() {
+			err := db.Close(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}()
+
+		// Already Open
+		if err := db.Open(ctx); err == nil {
+			t.Fatal("expected already open error")
+		}
+
+		// Put Empty
+		err := dbputEmpty(ctx, db, tables)
+		if err != nil {
+			t.Fatalf("dbputEmpty: %v", err)
+		}
+
+		// Put Invalid Table
+		err = dbputInvalidTable(ctx, db, fmt.Sprintf("table%d", len(tables)))
+		if err != nil {
+			t.Fatalf("dbputInvalidTable: %v", err)
+		}
+
+		// Has negative
+		err = dbhasNegative(ctx, db, tables, insertCount)
+		if err != nil {
+			t.Fatalf("dbhasNegative: %v", err)
+		}
+
+		// Get negative
+		err = dbgetsNegative(ctx, db, tables, insertCount)
+		if err != nil {
+			t.Fatalf("dbgetsNegative: %v", err)
+		}
+
+		// Puts
+		err = dbputs(ctx, db, tables, insertCount)
+		if err != nil {
+			t.Fatalf("dbputs: %v", err)
+		}
+
+		// Get Invalid Table
+		err = dbgetInvalidTable(ctx, db, fmt.Sprintf("table%d", len(tables)))
+		if err != nil {
+			t.Fatalf("dbgetInvalidTable: %v", err)
+		}
+
+		// Get
+		err = dbgets(ctx, db, tables, insertCount)
+		if err != nil {
+			t.Fatalf("dbgets: %v", err)
+		}
+
+		// Has Invalid Table
+		err = dbhasInvalidTable(ctx, db, fmt.Sprintf("table%d", len(tables)))
+		if err != nil {
+			t.Fatalf("dbgetInvalidTable: %v", err)
+		}
+
+		// Has
+		err = dbhas(ctx, db, tables, insertCount)
+		if err != nil {
+			t.Fatalf("dbhas: %v", err)
+		}
+	})
+
+	t.Run("overflow", func(t *testing.T) {
+		if !distributed {
+			t.Parallel()
+		}
+
+		rdb, tables := prepareTestSuite(ctx, t, 1, 0, dbFunc, nil)
+		defer func() {
+			err := rdb.Close(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}()
+		table := tables[0]
+
+		// Negative checks
+		_, err := rdb.Get(ctx, table, []byte("test"))
+		if !errors.Is(err, larry.ErrKeyNotFound) {
+			t.Fatalf("expected err %v, got %v", larry.ErrKeyNotFound, err)
+		}
+
+		has, err := rdb.Has(ctx, table, []byte("test"))
+		if err != nil {
+			t.Fatalf("%T %v", err, err)
+		}
+		if has {
+			t.Fatalf("has: expected key not found")
+		}
+
+		// Positive Checks
+		key := []byte("key")
+		data := []byte("hello, world!")
+		err = rdb.Put(ctx, table, key, data)
+		if err != nil {
+			t.Fatalf("%T %v", err, err)
+		}
+		KEY := []byte("KEY")
+		DATA := []byte("HELLO, WORLD!")
+		err = rdb.Put(ctx, table, KEY, DATA)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Get data out again
+		dataRead, err := rdb.Get(ctx, table, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(data, dataRead) {
+			t.Fatalf("data not identical")
+		}
+
+		has, err = rdb.Has(ctx, table, key)
+		if err != nil {
+			t.Fatalf("%T %v", err, err)
+		}
+		if !has {
+			t.Fatalf("key not found: %v", key)
+		}
+
+		dataRead, err = rdb.Get(ctx, table, KEY)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(DATA, dataRead) {
+			t.Fatalf("data not identical")
+		}
+
+		has, err = rdb.Has(ctx, table, KEY)
+		if err != nil {
+			t.Fatalf("%T %v", err, err)
+		}
+		if !has {
+			t.Fatalf("key not found: %v", KEY)
+		}
+
+		// Overflow to next file
+		overflowData := make([]byte, int(RawDBTestBlockSize)-len(data)-len(DATA)+1)
+		for k := range overflowData {
+			k = k % (math.MaxUint8 + 1)
+			if k < 0 || k > math.MaxUint8 {
+				t.Fatalf("uint8 overflow: %v", k)
+			}
+			overflowData[k] = uint8(k)
+		}
+		overflowKey := []byte("overflow")
+		err = rdb.Put(ctx, table, overflowKey, overflowData)
+		if err != nil {
+			t.Fatal(err)
+		}
+		overflowRead, err := rdb.Get(ctx, table, overflowKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(overflowData, overflowRead) {
+			t.Fatalf("overflow data not identical")
+		}
+	})
 }
 
 // TODO extra tests

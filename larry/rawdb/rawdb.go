@@ -2,6 +2,9 @@
 // Use of this source code is governed by the MIT License,
 // which can be found in the LICENSE file.
 
+// Package rawdb is an append-only, file-based key-value store for immutable
+// data. It uses Larry compliant databases to index metadata while storing
+// values in rolling disk files. No transactions or deletions are supported.
 package rawdb
 
 import (
@@ -17,19 +20,23 @@ import (
 	"github.com/juju/loggo"
 
 	"github.com/hemilabs/larry/larry"
+	"github.com/hemilabs/larry/larry/clickhouse"
 	"github.com/hemilabs/larry/larry/leveldb"
+	"github.com/hemilabs/larry/larry/pebble"
 )
 
 const (
 	logLevel = "INFO"
 
-	dbname   = ""
-	indexDir = "index"
-	DataDir  = "data"
+	indexDir     = "index"
+	DataDir      = "data"
+	DefaultTable = ""
 
 	DefaultMaxFileSize = 256 * 1024 * 1024 // 256MB file max; will never be bigger.
 
-	TypeLevelDB = "leveldb"
+	TypeLevelDB    = "leveldb"
+	TypePebbleDB   = "pebble"
+	TypeClickhouse = "clickhouse"
 )
 
 var (
@@ -43,6 +50,9 @@ func init() {
 	}
 }
 
+// Assert required interfaces
+var _ larry.Database = (*RawDB)(nil)
+
 type RawDB struct {
 	mtx sync.RWMutex
 
@@ -53,19 +63,28 @@ type RawDB struct {
 }
 
 type Config struct {
-	DB      string
-	Home    string
-	MaxSize int64
+	DB        string
+	Home      string
+	RemoteURI string
+	Table     string
+	MaxSize   int64
 }
 
-func NewDefaultConfig(home string) *Config {
+// DefaultRawDBConfig will set an empty string as the indexing
+// table in order to minimize space used. Some indexing databases
+// may not allow this, and thus this parameter should be
+// manually changed if necessary.
+func DefaultRawDBConfig(home, remoteURI string) *Config {
 	return &Config{
-		Home:    home,
-		MaxSize: DefaultMaxFileSize,
+		Home:      home,
+		MaxSize:   DefaultMaxFileSize,
+		Table:     DefaultTable,
+		RemoteURI: remoteURI,
+		DB:        TypeLevelDB,
 	}
 }
 
-func New(cfg *Config) (*RawDB, error) {
+func NewRawDB(cfg *Config) (larry.Database, error) {
 	log.Tracef("New")
 	defer log.Tracef("New exit")
 
@@ -77,9 +96,14 @@ func New(cfg *Config) (*RawDB, error) {
 		return nil, fmt.Errorf("invalid max size: %v", cfg.MaxSize)
 	}
 
-	// TODO: add more dbs as they get added
 	switch cfg.DB {
 	case TypeLevelDB:
+	case TypePebbleDB:
+	case TypeClickhouse:
+		if cfg.Table == "" {
+			return nil,
+				errors.New("clickhouse prevents empty strings as table names")
+		}
 	default:
 		return nil, fmt.Errorf("invalid db: %v", cfg.DB)
 	}
@@ -108,8 +132,16 @@ func (r *RawDB) Open(ctx context.Context) error {
 	switch r.cfg.DB {
 	case TypeLevelDB:
 		lcfg := leveldb.DefaultLevelDBConfig(filepath.Join(r.cfg.Home, indexDir),
-			[]string{dbname})
+			[]string{r.cfg.Table})
 		r.index, err = leveldb.NewLevelDB(lcfg)
+	case TypePebbleDB:
+		lcfg := pebble.DefaultPebbleConfig(filepath.Join(r.cfg.Home, indexDir),
+			[]string{r.cfg.Table})
+		r.index, err = pebble.NewPebbleDB(lcfg)
+	case TypeClickhouse:
+		lcfg := clickhouse.DefaultClickConfig(r.cfg.RemoteURI,
+			[]string{r.cfg.Table})
+		r.index, err = clickhouse.NewClickDB(lcfg)
 	default:
 	}
 	if err != nil {
@@ -151,16 +183,20 @@ func (r *RawDB) DB() larry.Database {
 	return r.index
 }
 
-func (r *RawDB) Has(ctx context.Context, key []byte) (bool, error) {
+func (r *RawDB) Del(_ context.Context, _ string, _ []byte) error {
+	return larry.ErrNotSupported
+}
+
+func (r *RawDB) Has(ctx context.Context, table string, key []byte) (bool, error) {
 	log.Tracef("Has")
 	defer log.Tracef("Has exit")
 
-	return r.index.Has(ctx, dbname, key)
+	return r.index.Has(ctx, table, key)
 }
 
-func (r *RawDB) Insert(ctx context.Context, key, value []byte) error {
-	log.Tracef("Insert")
-	defer log.Tracef("Insert exit")
+func (r *RawDB) Put(ctx context.Context, table string, key, value []byte) error {
+	log.Tracef("Put")
+	defer log.Tracef("Put exit")
 
 	if int64(len(value)) > r.cfg.MaxSize {
 		return fmt.Errorf("length exceeds maximum length: %v > %v",
@@ -168,7 +204,7 @@ func (r *RawDB) Insert(ctx context.Context, key, value []byte) error {
 	}
 
 	// Assert we do not have this key stored yet.
-	if ok, err := r.index.Has(ctx, dbname, key); ok {
+	if ok, err := r.index.Has(ctx, table, key); ok {
 		return errors.New("key already exists")
 	} else if err != nil {
 		return err
@@ -184,7 +220,7 @@ func (r *RawDB) Insert(ctx context.Context, key, value []byte) error {
 			return errors.New("could not determine last filename")
 		}
 
-		lfe, err := r.index.Get(ctx, dbname, lastFilenameKey)
+		lfe, err := r.index.Get(ctx, table, lastFilenameKey)
 		if err != nil {
 			if errors.Is(err, larry.ErrKeyNotFound) {
 				lfe = []byte{0, 0, 0, 0}
@@ -216,7 +252,7 @@ func (r *RawDB) Insert(ctx context.Context, key, value []byte) error {
 			last++
 			lastData := make([]byte, 8)
 			binary.BigEndian.PutUint32(lastData, last)
-			err = r.index.Put(ctx, dbname, lastFilenameKey, lastData)
+			err = r.index.Put(ctx, table, lastFilenameKey, lastData)
 			if err != nil {
 				return err
 			}
@@ -251,7 +287,7 @@ func (r *RawDB) Insert(ctx context.Context, key, value []byte) error {
 		}
 
 		// Write coordinates
-		err = r.index.Put(ctx, dbname, key, c)
+		err = r.index.Put(ctx, table, key, c)
 		if err != nil {
 			return err
 		}
@@ -260,11 +296,11 @@ func (r *RawDB) Insert(ctx context.Context, key, value []byte) error {
 	}
 }
 
-func (r *RawDB) Get(ctx context.Context, key []byte) ([]byte, error) {
+func (r *RawDB) Get(ctx context.Context, table string, key []byte) ([]byte, error) {
 	log.Tracef("Get: %x", key)
 	defer log.Tracef("Get exit: %x", key)
 
-	c, err := r.index.Get(ctx, dbname, key)
+	c, err := r.index.Get(ctx, table, key)
 	if err != nil {
 		return nil, err
 	}
@@ -297,4 +333,28 @@ func (r *RawDB) Get(ctx context.Context, key []byte) ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+func (r *RawDB) Begin(_ context.Context, _ bool) (larry.Transaction, error) {
+	return nil, larry.ErrNotSupported
+}
+
+func (r *RawDB) View(_ context.Context, _ func(_ context.Context, _ larry.Transaction) error) error {
+	return larry.ErrNotSupported
+}
+
+func (r *RawDB) Update(_ context.Context, _ func(ctx context.Context, _ larry.Transaction) error) error {
+	return larry.ErrNotSupported
+}
+
+func (r *RawDB) NewIterator(_ context.Context, _ string) (larry.Iterator, error) {
+	return nil, larry.ErrNotSupported
+}
+
+func (r *RawDB) NewRange(_ context.Context, _ string, _, _ []byte) (larry.Range, error) {
+	return nil, larry.ErrNotSupported
+}
+
+func (r *RawDB) NewBatch(_ context.Context) (larry.Batch, error) {
+	return nil, larry.ErrNotSupported
 }
